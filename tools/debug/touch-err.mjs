@@ -1,0 +1,34 @@
+import puppeteer from 'puppeteer';
+import { createServer } from 'node:http';
+import { readFileSync, existsSync } from 'node:fs';
+import { resolve, dirname, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const DIST = resolve(ROOT, 'dist');
+const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css'};
+const server = createServer((q,r)=>{let p=q.url.split('?')[0];if(p==='/')p='/index.html';const f=resolve(DIST,'.'+p);
+ if(!existsSync(f)){r.writeHead(404);r.end();return}r.writeHead(200,{'Content-Type':MIME[extname(f)]||'text/plain'});r.end(readFileSync(f))});
+await new Promise(r=>server.listen(0,r));
+const PORT=server.address().port;
+const b = await puppeteer.launch({headless:'shell',args:['--no-sandbox','--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--disable-dev-shm-usage']});
+const p = await b.newPage();
+await p.setViewport({width:412,height:915,isMobile:true,hasTouch:true});
+p.on('console', m=>{ const t=m.text(); if(t.includes('STACK')||m.type()==='error') console.log(t.slice(0,700)); });
+p.on('pageerror',e=>console.log('PAGEERROR',(e&&e.stack||String(e)).slice(0,700)));
+await p.goto(`http://localhost:${PORT}/index.html`,{waitUntil:'domcontentloaded'});
+await new Promise(r=>setTimeout(r,3500));
+await p.evaluate(()=>{const n=Array.from(document.querySelectorAll('button,.menu-btn')).find(x=>x.textContent.includes('Полигон'));n&&n.click();});
+await new Promise(r=>setTimeout(r,900));
+await p.evaluate(()=>{const n=Array.from(document.querySelectorAll('button')).find(x=>x.textContent.includes('В ОСАДУ'));n&&n.click();});
+await new Promise(r=>setTimeout(r,2500));
+const padBox = await (await p.$('#aimpad')).boundingBox();
+const cx = padBox.x+padBox.width/2, cy = padBox.y+padBox.height*0.62;
+await page_touch(p, cx, cy);
+async function page_touch(pg,cx,cy){
+  await pg.touchscreen.touchStart(cx,cy);
+  await pg.touchscreen.touchMove(cx+30,cy-20);
+  await pg.touchscreen.touchMove(cx+50,cy-35);
+  await pg.touchscreen.touchEnd();
+}
+await new Promise(r=>setTimeout(r,1500));
+await b.close(); server.close(); process.exit(0);

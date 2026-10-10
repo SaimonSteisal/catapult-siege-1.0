@@ -1,0 +1,22 @@
+import puppeteer from 'puppeteer';
+import { createServer } from 'node:http';
+import { readFileSync, existsSync } from 'node:fs';
+import { resolve, dirname, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const DIST = resolve(ROOT, 'dist');
+const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css'};
+const server = createServer((q,r)=>{let p=q.url.split('?')[0];if(p==='/')p='/index.html';const f=resolve(DIST,'.'+p);
+ if(!existsSync(f)){r.writeHead(404);r.end();return}r.writeHead(200,{'Content-Type':MIME[extname(f)]||'text/plain'});r.end(readFileSync(f))});
+await new Promise(r=>server.listen(8933,r));
+const b = await puppeteer.launch({headless:'shell',args:['--no-sandbox','--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--disable-dev-shm-usage']});
+const p = await b.newPage();
+await p.setViewport({width:412,height:915,isMobile:true,hasTouch:true});
+p.on('console', async m=>{const t=m.text(); let extra=''; try{const args=m.args(); if(args[0] && args[0]._remoteObject && args[0]._remoteObject.description) extra=args[0]._remoteObject.description;}catch(e){}
+  const props = await Promise.all(m.args().map(a=>a.jsonValue().catch(()=>null)));
+  console.log('CON['+m.type()+']', t.slice(0,300), JSON.stringify(props).slice(0,300));});
+p.on('pageerror',e=>console.log('PAGEERROR',(e&&e.stack||String(e)).slice(0,1200)));
+await p.goto('http://localhost:8933/index.html',{waitUntil:'networkidle2',timeout:90000});
+await new Promise(r=>setTimeout(r,5000));
+console.log('done');
+await b.close(); server.close(); process.exit(0);

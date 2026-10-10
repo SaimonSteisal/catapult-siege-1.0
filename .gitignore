@@ -1,0 +1,9 @@
+node_modules/
+dist/
+shots/
+android/.gradle/
+android/app/build/
+android/build/
+*.keystore
+key.properties
+.DS_Store
