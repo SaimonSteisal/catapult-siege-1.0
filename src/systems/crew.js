@@ -80,13 +80,15 @@ export function addCrewXp(id, amount) {
 }
 
 export function levelUpCost(level) { return C.levelCost[clamp(level, 0, C.levelCost.length - 1)] || 99999; }
+/** price to go from `level` to `level+1` (levelCost is indexed by TARGET level) */
+export function trainCost(level) { return C.levelCost[clamp(level + 1, 0, C.levelCost.length - 1)] || 99999; }
 
 export function trainCrew(id) {
   const s = S();
   const c = s.crew.roster.find((x) => x.id === id);
   if (!c) return { ok: false };
-  const cost = levelUpCost(c.level);
-  if (c.level >= C.levelXp.length) return { ok: false, reason: 'max' };
+  if (c.level >= C.levelXp.length - 1) return { ok: false, reason: 'max' };
+  const cost = trainCost(c.level);
   if (!pay({ coins: cost })) return { ok: false, reason: 'cost', cost };
   c.xp = xpForLevel(c.level);
   const r = addCrewXp(id, 0);

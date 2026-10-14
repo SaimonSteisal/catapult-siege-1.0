@@ -22,7 +22,7 @@ import { VFX } from './systems/vfx.js';
 import { CameraRig } from './systems/camera.js';
 import { Weather } from './systems/weather.js';
 import { Enemy } from './systems/enemy.js';
-import { Economy, tickCamp } from './systems/economy.js';
+import { Economy, tickCamp, campRate } from './systems/economy.js';
 import { computeMods, addXp, unlockedAmmo, ammoCost, grantTrophy, activeSynergies } from './systems/progression.js';
 import { SkillDirector, activeCrew, addFatigue, crewMods, roleDef } from './systems/crew.js';
 import { generateMission, campaignList, recordMissionResult, typeName, describeObjectives } from './systems/missions.js';
@@ -149,8 +149,9 @@ class Game {
   _buildMenuScene() {
     const rng = makeRng(20240915);
     this.terrain = new Terrain(rng.int(1, 99999), 'meadow');
-    this.scene.add(this.terrain.buildMesh(this.materials));
-    this.world.buildBackdrop(rng);
+    this.terrainMesh = this.terrain.buildMesh(this.materials);   // MUST be tracked: otherwise the menu terrain survives into missions
+    this.scene.add(this.terrainMesh);
+    this.world.buildBackdrop(rng, 'meadow');
     this.world.buildFlora(rng, this.terrain, this.world.quality.grass, 'meadow');
     this.world.buildCampProps(rng, this.terrain);
     this.debris = new DebrisSystem(this.scene, this.materials);
@@ -159,6 +160,7 @@ class Game {
     this.rig = new CameraRig(this.camera, this.uiRoot);
     this.weather = new Weather(this.scene, this.physics, this.world.lights);
     this.weather.configure({ id: 'calm', wind: 0.15 }, rng);
+    this.world.applySkyTheme('sunset');
     this.physics.attach(this.terrain, this.structures);
 
     // show off the machine in the menu
@@ -333,6 +335,7 @@ class Game {
     this.timeFreeze = false;
     this._wearWarned = false;
     this._reachWarned = false;
+    this._celebrated = false;
     this.shotInFlight = false;
 
     // ---- modifiers
@@ -475,6 +478,17 @@ class Game {
       g.add(cone);
     }
     this.world.decor.add(g);
+  }
+
+  /** modifier wins; otherwise a random theme from the biome's pool (mission seed) */
+  _pickSkyTheme(mission, rng) {
+    const bd = CFG.world.biomes[mission.biome] || CFG.world.biomes.meadow;
+    const modId = mission.mod ? mission.mod.id : 'calm';
+    if (modId === 'night') return mission.biome === 'winter' ? 'aurora' : 'night';
+    if (modId === 'rain') return 'storm';
+    if (modId === 'fog') return 'mist';
+    if (modId === 'gale') return bd.skies[0];
+    return rng.pick(bd.skies);
   }
 
   _ammoColor(id) {
@@ -1154,12 +1168,71 @@ class Game {
     this._updatePrediction();
   }
 
+  // ------------------------------------------------------------ app control --
+  exitApp(force = false) {
+    Save.save(true);
+    const cap = window.Capacitor;
+    if (cap && cap.Plugins && cap.Plugins.App && cap.Plugins.App.exitApp) {
+      cap.Plugins.App.exitApp().catch(() => {});
+      return;
+    }
+    window.close();
+    setTimeout(() => toast('Закройте вкладку браузера — веб-версия не может закрыться сама', '', 3000), 200);
+  }
+
+  resetCamera() {
+    if (!this.rig) return;
+    if (this.inBattle && this.mission) {
+      this.rig.setMode('battle', { force: true });
+      this.rig.azGoal = 168; this.rig.polGoal = 74; this.rig.distGoal = 34;
+      this.rig.targetGoal.set(this.trebuchet.root.position.x - 1, 2.4, this.mission.dist * 0.26);
+      this.rig.manualOffset.set(0, 0, 0);
+    } else {
+      this.rig.lookAtTrebuchet(new THREE.Vector3(0, 0, 0));
+      this.rig.distGoal = 21; this.rig.azGoal = 214; this.rig.polGoal = 70;
+    }
+    Audio.uiTap();
+    toast(t('cam_reset'), '', 900);
+  }
+
+  /** victory fireworks + banner before the results screen */
+  _celebrate(report) {
+    if (this._celebrated) return;
+    this._celebrated = true;
+    const fort = this.structures.targets.find((t2) => t2.priority > 0);
+    const center = fort ? fort.center.clone() : new THREE.Vector3(0, 4, this.mission.dist);
+    center.y += 6;
+    this.rig.setMode('battle', { target: center.clone().setY(center.y * 0.6), dist: 46, pol: 72, az: 180 });
+    const colors = [0xd9a62e, 0xb3372c, 0x5c8a3a, 0x4a8fb5, 0xe8dcc0];
+    for (let i = 0; i < 5; i++) {
+      setTimeout(() => {
+        if (!this.inBattle && i > 1) return;
+        const p = center.clone().add(new THREE.Vector3((Math.random() - 0.5) * 22, Math.random() * 8, (Math.random() - 0.5) * 14));
+        this.vfx.fireworkBurst(p, colors[i % colors.length]);
+        this.audio.explode(0.75);
+      }, i * 320);
+    }
+    const banner = el('div', { class: 'vic-banner' }, [
+      el('h1', { text: t('vic_title') }),
+      el('p', { text: t('vic_sub') }),
+    ]);
+    this.uiRoot.appendChild(banner);
+    setTimeout(() => banner.remove(), 2600);
+    Audio.success();
+    vibrate([30, 60, 30, 60, 60]);
+  }
+
   // ============================================================ END MISSION ==
   _maybeEndMission() {
     if (!this.inBattle || this.pendingEnd) return;
     const m = this.mission;
     const complete = m.checkComplete(this.economy, this.structures);
-    if (complete) { this.pendingEnd = 'win'; setTimeout(() => this.endMission(true), 900); return; }
+    if (complete) {
+      this.pendingEnd = 'win';
+      this._celebrate();
+      setTimeout(() => this.endMission(true), 2300);
+      return;
+    }
     const anyShells = Object.values(this.loadout || {}).some((v) => v > 0);
     const noBudget = this.economy.supplyLeft < CFG.missions.shotCostSupply;
     if (!this.shotInFlight && !anyShells) {
@@ -1254,6 +1327,7 @@ class Game {
     this.world.buildBackdrop(rng);
     this.world.buildFlora(rng, this.terrain, this.world.quality.grass, 'meadow');
     this.world.buildCampProps(rng, this.terrain);
+    this.world.applySkyTheme('sunset');
     this.physics.attach(this.terrain, this.structures);
     this.trebuchet.terrain = this.terrain;
     this.trebuchet.place(0, 0, Math.PI / 2);
@@ -1330,6 +1404,10 @@ class Game {
 
     this.time += dtReal;
     Audio.tickMusic();
+
+    // camp idle production ticks once per real second while the app is open
+    this._campAcc = (this._campAcc || 0) + dtReal;
+    if (this._campAcc >= 1) { tickCamp(this._campAcc); this._campAcc = 0; }
 
     // time scaling (freeze while aiming, slow-mo on impact)
     let scale = 1;
@@ -1502,23 +1580,50 @@ class Game {
   }
 
   _buildDevPanel(p) {
-    const row = (label, fn) => {
-      const b = el('button', { text: label, onclick: () => { fn(); this._updateHud(0); } });
+    clear(p);
+    const row = (label, fn, guard) => {
+      const b = el('button', {
+        text: label,
+        onclick: () => {
+          if (guard && !guard()) return;
+          fn();
+          this._updateHud(0);
+          if (p.classList.contains('on')) this._buildDevPanel(p);   // refresh labels/state
+        },
+      });
       p.appendChild(b);
     };
+    const inBattle = () => {
+      if (!this.inBattle) { toast('Доступно только в бою', 'bad', 1400); return false; }
+      return true;
+    };
     p.appendChild(el('div', { text: '🧪 ТЕСТЕР', style: { fontWeight: '700', marginBottom: '4px' } }));
-    row('+500 всех ресурсов', () => { for (const id of ['stone', 'wood', 'metal', 'rope', 'pitch', 'coins']) addResource(id, 500); });
-    row('+200 снабжения', () => { this.economy.budget += 200; });
-    row('Ядра +99 (все типы)', () => { for (const id of CFG.ammoOrder) this.loadout[id] = (this.loadout[id] || 0) + 99; this.hud.buildAmmo(); });
-    row('God-mode ' + (CFG.dev.godMode ? 'OFF' : 'ON'), () => { CFG.dev.godMode = !CFG.dev.godMode; });
-    row('Мгновенный взвод ' + (CFG.dev.instantCock ? 'OFF' : 'ON'), () => { CFG.dev.instantCock = !CFG.dev.instantCock; });
-    row('Полный ремонт машины', () => { for (const id of CFG.trebuchet.nodes) this.trebuchet.repairNode(id, 1e5); this.hud.renderNodes(); this._cepDirty = true; });
-    row('Износ 90% (проверка дуги)', () => { for (const id of CFG.trebuchet.nodes) { const n = this.trebuchet.nodes[id]; n.hp = n.max * 0.1; } this.trebuchet._syncNodesVisual(); this.hud.renderNodes(); this._cepDirty = true; this._updatePrediction(); });
-    row('Разрушить выбранную цель', () => { const t = this.selectedTarget; if (t) for (const b of t.blocks) if (b.alive) this.structures.damage(b, 1e6, { source: 'dev' }); });
-    row('Залп врага по мне', () => { if (this.enginesSafe()) this.enemy._fireAtPlayer(0.9, 2); });
+    row('+500 всех ресурсов', () => { for (const id of ['stone', 'wood', 'metal', 'rope', 'pitch', 'coins']) addResource(id, 500); toast('+500 ресурсов', 'good', 1000); });
+    row('+200 снабжения', () => { this.economy.budget += 200; toast('Снабжение +200', 'good', 1000); }, inBattle);
+    row('Ядра +99 (все типы)', () => { for (const id of CFG.ammoOrder) this.loadout[id] = (this.loadout[id] || 0) + 99; this.hud.buildAmmo(); toast('Ядра +99', 'good', 1000); }, inBattle);
+    row('God-mode: ' + (CFG.dev.godMode ? 'ВКЛ' : 'выкл'), () => { CFG.dev.godMode = !CFG.dev.godMode; });
+    row('Мгновенный взвод: ' + (CFG.dev.instantCock ? 'ВКЛ' : 'выкл'), () => { CFG.dev.instantCock = !CFG.dev.instantCock; });
+    row('Полный ремонт машины', () => { for (const id of CFG.trebuchet.nodes) this.trebuchet.repairNode(id, 1e5); this.hud.renderNodes(); this._cepDirty = true; toast('Машина как новая', 'good', 1200); }, inBattle);
+    row('Износ 90% (проверка дуги)', () => { for (const id of CFG.trebuchet.nodes) { const n = this.trebuchet.nodes[id]; n.hp = n.max * 0.1; } this.trebuchet._syncNodesVisual(); this.hud.renderNodes(); this._cepDirty = true; this._updatePrediction(); toast('Ужасный износ', 'bad', 1200); }, inBattle);
+    row('Разрушить выбранную цель', () => {
+      if (!this.selectedTarget) { toast('Сначала выберите цель: тап по крепости', 'bad', 1800); return; }
+      const t = this.selectedTarget;
+      for (const b of t.blocks) if (b.alive) this.structures.damage(b, 1e6, { source: 'dev' });
+      this._checkTargetEvents();
+    }, inBattle);
+    row('Залп врага по мне', () => {
+      if (!this.enginesSafe()) { toast('В этой миссии нет орудий врага', 'bad', 1600); return; }
+      this.enemy._fireAtPlayer(0.9, 2);
+    }, inBattle);
     row('Пересчитать разброс', () => { this._cepDirty = true; this._updatePrediction(); });
-    row('Победа (results S)', () => this.endMission(true));
-    row('Провал (results D)', () => this.endMission(false));
+    row('Небо: следующая тема', () => {
+      const keys = Object.keys(CFG.world.skies);
+      this._skyIdx = ((this._skyIdx === undefined ? keys.indexOf(this.world.skyThemeId || 'sunset') : this._skyIdx) + 1) % keys.length;
+      this.world.applySkyTheme(keys[this._skyIdx]);
+      toast('Небо: ' + keys[this._skyIdx], '', 1200);
+    });
+    row('Победа (results)', () => this.endMission(true), inBattle);
+    row('Провал (results)', () => this.endMission(false), inBattle);
     row('Закрыть', () => p.classList.remove('on'));
   }
   enginesSafe() { return this.enemy && this.enemy.engines && this.enemy.engines.length > 0; }

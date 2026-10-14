@@ -90,10 +90,10 @@ export const CFG = {
     orbitMinAz: -155,
     orbitMaxAz: 155,
     distMin: 9,
-    distMax: 92,
+    distMax: 70,
     distDefault: 26,
     targetDefault: [0, 3, 0],
-    panRangeZ: 42,
+    panRangeZ: 26,
     lerpPos: 0.16,
     lerpLook: 0.20,
     shakeDecay: 6.5,
@@ -238,7 +238,7 @@ export const CFG = {
     // per-level cost formula: coins = base*lvl^1.35, blueprints = floor(lvl/3)
     costBase: { mechanics: 95, ballistics: 110, durability: 85, ordnance: 130, crew: 120 },
     costRes:  { mechanics:{metal:14}, ballistics:{rope:12}, durability:{wood:18}, ordnance:{stone:40}, crew:{pitch:6} },
-    rankRequiredPerLevel: [0,0,1,1,2,2,3,3,4,5],
+    rankRequiredPerLevel: [0,0,0,0,0,0,1,1,2,2],   // early branch levels are coin-gated only
     effects: {
       mechanics:  { perLevel:{ power:0.105 }, nodes:{ 3:'cockAuto', 5:'doubleCock', 8:'overdrive' } },
       ballistics: { perLevel:{ spread:-0.085 }, nodes:{ 2:'windComp', 4:'scopeZoom', 6:'ricochetPredict', 8:'ghostMaster' } },
@@ -299,8 +299,8 @@ export const CFG = {
   ranks: {
     list: ['Рекрут','Орудийный ученик','Наводчик','Мастер осады','Осадный маршал','Гранд-канонир'],
     listEn: ['Recruit','Apprentice','Gunner','Siege Master','Siege Marshal','Grand Cannonier'],
-    levelsPerRank: 10,
-    xpPerLevel: (lvl) => 220 + lvl * 145,
+    levelsPerRank: 6,
+    xpPerLevel: (lvl) => 180 + lvl * 120,
     rewardPerRankUp: { coins: 400, blueprints: 2 },
   },
 
@@ -369,6 +369,32 @@ export const CFG = {
     enabled: false,   // wired but disabled in this build (Decision D14: needs server validation)
     adsEnabled: false,
     rewardedPerDay: { precise_measure: 3, double_loot: 5, instant_repair: 4, reroll: 3 },
+  },
+
+  // ------------------------------------------------------------- WORLD/SKY ---
+  world: {
+    skies: {
+      dawn:    { top: 0x6f86b8, mid: 0xd9a8a0, bot: 0xf2c9a0, sun: 0xffd9b0, sunInt: 0.95, sunEl: 8,  stars: 0,    clouds: 0.25, aurora: 0,   haze: 0.35, fog: 0xd8b8a8, fogNear: 60, fogFar: 300 },
+      noon:    { top: 0x3f7ec4, mid: 0x9cc4e0, bot: 0xd8e4e8, sun: 0xfff4d0, sunInt: 1.35, sunEl: 62, stars: 0,    clouds: 0.18, aurora: 0,   haze: 0.10, fog: 0xc4d4dc, fogNear: 90, fogFar: 340 },
+      sunset:  { top: 0x5b8fc4, mid: 0xa9c6dd, bot: 0xe8c9a0, sun: 0xffd9a0, sunInt: 1.18, sunEl: 14, stars: 0,    clouds: 0.22, aurora: 0,   haze: 0.30, fog: 0xc9d6e2, fogNear: 90, fogFar: 340 },
+      dusk:    { top: 0x2b3a63, mid: 0x7a5a7a, bot: 0xd98a5a, sun: 0xff9a5a, sunInt: 0.7,  sunEl: 3,  stars: 0.35, clouds: 0.30, aurora: 0,   haze: 0.45, fog: 0x6a5a72, fogNear: 50, fogFar: 260 },
+      night:   { top: 0x0b1226, mid: 0x1d2a44, bot: 0x3a4a63, sun: 0xbfd0e8, sunInt: 0.32, sunEl: 38, stars: 1,    clouds: 0.12, aurora: 0,   haze: 0.15, fog: 0x22303f, fogNear: 40, fogFar: 220 },
+      aurora:  { top: 0x081222, mid: 0x14303a, bot: 0x2a4a52, sun: 0xcfe0f0, sunInt: 0.3,  sunEl: 30, stars: 1,    clouds: 0.08, aurora: 1,   haze: 0.10, fog: 0x1a2a32, fogNear: 40, fogFar: 220 },
+      storm:   { top: 0x4a5560, mid: 0x6a747e, bot: 0x8a9298, sun: 0xb0b8c0, sunInt: 0.5,  sunEl: 40, stars: 0,    clouds: 0.85, aurora: 0,   haze: 0.60, fog: 0x7a848c, fogNear: 30, fogFar: 180 },
+      mist:    { top: 0x9aa8b0, mid: 0xb4bcc2, bot: 0xcfd4d6, sun: 0xd8d2c4, sunInt: 0.5,  sunEl: 30, stars: 0,    clouds: 0.5,  aurora: 0,   haze: 0.8,  fog: 0xb9bfc4, fogNear: 14, fogFar: 105 },
+      heat:    { top: 0x7ab0d4, mid: 0xd4c8a0, bot: 0xf0e0b0, sun: 0xfff0c0, sunInt: 1.5,  sunEl: 70, stars: 0,    clouds: 0.06, aurora: 0,   haze: 0.55, fog: 0xe0d4b4, fogNear: 70, fogFar: 300 },
+      ash:     { top: 0x2a2020, mid: 0x4a3430, bot: 0x6a4a3a, sun: 0xff7a4a, sunInt: 0.6,  sunEl: 20, stars: 0.15, clouds: 0.6,  aurora: 0,   haze: 0.7,  fog: 0x4a3a34, fogNear: 35, fogFar: 200 },
+    },
+    biomes: {
+      meadow:  { terrain: { amp: 3.2, rough: 1.8, flat: 32, water: false }, tint: 0x7a8a4f, rock: 0x8b8378, trees: 'pine',   nTrees: 0.07, skies: ['noon', 'sunset', 'dawn'],  backdrop: 'mountains' },
+      river:   { terrain: { amp: 2.4, rough: 1.6, flat: 34, water: true  }, tint: 0x6f8a52, rock: 0x8b8378, trees: 'birch',  nTrees: 0.09, skies: ['dawn', 'sunset', 'noon'], backdrop: 'treeline' },
+      mountain:{ terrain: { amp: 9.5, rough: 3.4, flat: 24, water: false }, tint: 0x7d7461, rock: 0x8b8378, trees: 'pine',   nTrees: 0.05, skies: ['noon', 'dusk', 'mist'],  backdrop: 'mountains' },
+      winter:  { terrain: { amp: 3.4, rough: 1.9, flat: 32, water: false }, tint: 0xcfd8e0, rock: 0x8a8f96, trees: 'pine',   nTrees: 0.09, skies: ['night', 'aurora', 'dawn'], backdrop: 'mountains', snow: true },
+      coast:   { terrain: { amp: 3.0, rough: 1.4, flat: 30, water: true  }, tint: 0x9a9463, rock: 0x8b8378, trees: 'pine',   nTrees: 0.05, skies: ['sunset', 'noon', 'dusk'], backdrop: 'mountains' },
+      desert:  { terrain: { amp: 2.6, rough: 0.9, flat: 36, water: false }, tint: 0xd4b878, rock: 0xb09878, trees: 'palm',   nTrees: 0.03, skies: ['heat', 'sunset', 'dusk'], backdrop: 'dunes' },
+      autumn:  { terrain: { amp: 3.0, rough: 1.7, flat: 32, water: false }, tint: 0x8a7a3f, rock: 0x8b8378, trees: 'birchA', nTrees: 0.10, skies: ['dawn', 'sunset', 'mist'], backdrop: 'treeline' },
+      volcano: { terrain: { amp: 5.5, rough: 3.0, flat: 26, water: false }, tint: 0x4a4038, rock: 0x3a3230, trees: 'dead',   nTrees: 0.04, skies: ['ash', 'dusk', 'night'],  backdrop: 'volcanoes' },
+    },
   },
 
   // ------------------------------------------------------------------- DEV ---

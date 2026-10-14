@@ -161,6 +161,18 @@ if (!(aimDuring.az < aimBefore.az - 3 && aimDuring.el > aimBefore.el + 3 && touc
 }
 await new Promise((r) => setTimeout(r, 5000));
 
+// --- release inside the RED CANCEL ZONE must NOT fire (device regression)
+const shotsBeforeCancel = await page.evaluate(() => window.__GAME__.shotsThisMission.length);
+const cancelX = padBox.x + 14 + 46, cancelY = padBox.y + padBox.height - 14 - 46;
+await page.touchscreen.touchStart(pcx, pcy);
+await page.touchscreen.touchMove(cancelX + 6, cancelY + 4);
+await new Promise((r) => setTimeout(r, 120));
+await page.touchscreen.touchEnd();
+await new Promise((r) => setTimeout(r, 900));
+const shotsAfterCancel = await page.evaluate(() => window.__GAME__.shotsThisMission.length);
+console.log('cancel zone:', JSON.stringify({ shotsBeforeCancel, shotsAfterCancel }));
+if (shotsAfterCancel !== shotsBeforeCancel) errors.push('[assert] release in cancel zone still fired');
+
 // --- fire a shot through the solver path
 console.log('→ firing…');
 const before = await page.evaluate(() => ({ shots: window.__GAME__.shotsThisMission.length, alive: window.__GAME__.structures.aliveBlocks }));

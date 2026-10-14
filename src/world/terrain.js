@@ -20,13 +20,11 @@ export class Terrain {
   }
 
   biomeParams() {
-    switch (this.biome) {
-      case 'river':  return { amp: 2.4, rough: 1.6, flatRadius: 34, water: true,  tint: 0x6f8a52 };
-      case 'mountain':return { amp: 9.5, rough: 3.4, flatRadius: 24, water: false, tint: 0x7d7461 };
-      case 'winter': return { amp: 3.4, rough: 1.9, flatRadius: 32, water: false, tint: 0xcfd8e0 };
-      case 'coast':  return { amp: 3.0, rough: 1.4, flatRadius: 30, water: true,  tint: 0x9a9463 };
-      default:       return { amp: 3.2, rough: 1.8, flatRadius: 32, water: false, tint: 0x7a8a4f };
-    }
+    const bd = (CFG.world && CFG.world.biomes && CFG.world.biomes[this.biome]) || CFG.world.biomes.meadow;
+    return {
+      amp: bd.terrain.amp, rough: bd.terrain.rough, flatRadius: bd.terrain.flat,
+      water: bd.terrain.water, tint: bd.tint, rock: bd.rock, snow: !!bd.snow,
+    };
   }
 
   generate() {
@@ -53,6 +51,10 @@ export class Terrain {
         const edge = clamp((Math.max(Math.abs(wx), Math.abs(wz)) - this.size * 0.40) / (this.size * 0.10), 0, 1);
         h += edge * edge * 5.5;
 
+        // desert dunes: layered sine ridges
+        if (this.biome === 'desert') {
+          h += Math.sin(wx * 0.09) * Math.sin(wz * 0.07 + 1.3) * 1.15 + Math.sin(wx * 0.31 + wz * 0.23) * 0.35;
+        }
         // river carve
         if (p.water) {
           const riverX = Math.sin(wz * 0.021) * 26 + 40;
@@ -113,7 +115,8 @@ export class Terrain {
       const y = pos.getY(i);
       const slope = 1 - clamp(nrm.getY(i), 0, 1);
       c.copy(grass);
-      if (this.biome === 'winter') c.lerpColors(snow, rock, clamp(slope * 2.2, 0, 1));
+      if (p.snow) c.lerpColors(snow, rock, clamp(slope * 2.2, 0, 1));
+      else if (this.biome === 'desert') c.lerpColors(grass, sand, clamp(0.45 + slope * 1.6, 0, 1));
       else {
         c.lerpColors(c, dirt, clamp((y + 1.2) * 0.10, 0, 0.55));
         c.lerpColors(c, rock, clamp(slope * 2.4 - 0.25, 0, 1));

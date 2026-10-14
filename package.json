@@ -9,11 +9,14 @@
     "test": "node tools/headless-test.mjs",
     "balance": "node tools/balance-report.mjs",
     "sync": "npm run build && npx cap sync android",
+    "apk:debug": "cd android && gradlew.bat assembleDebug",
+    "apk:release": "cd android && gradlew.bat assembleRelease",
     "build:dev": "node tools/build.mjs --dev",
     "serve": "node tools/serve.mjs",
     "e2e": "node tools/test-browser.mjs"
   },
   "devDependencies": {
+    "@capacitor/cli": "^6.2.2",
     "esbuild": "^0.28.2",
     "puppeteer": "^23.11.1",
     "three": "^0.186.1"

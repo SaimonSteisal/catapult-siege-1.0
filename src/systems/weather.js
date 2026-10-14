@@ -50,8 +50,8 @@ export class Weather {
     if (this.mod.id === 'gale') this.windSpeed *= 1.25;
     this.visibility = this.mod.visibility === undefined ? 1 : this.mod.visibility;
     this.physics.setWind(this.windDir, this.windSpeed);
-    this._applyFog();
-    this._applyLighting();
+    // NOTE: sky/lighting/fog are applied by WorldScene.applySkyTheme() —
+    // weather only owns wind and precipitation now.
     this._applyParticles();
   }
 

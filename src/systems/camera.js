@@ -58,7 +58,7 @@ export class CameraRig {
 
   orbit(dx, dy, sens = 1) {
     if (this.mode === 'flight') return;
-    const k = 0.19 * sens * (this.dist / C.distDefault);
+    const k = 0.16 * sens;   // constant feel: no speed-up when zoomed out
     this.azGoal = clamp(this.azGoal - dx * k, C.orbitMinAz + 180, C.orbitMaxAz + 180);
     this.polGoal = clamp(this.polGoal - dy * k * (CFG.settingsInvertY ? -1 : 1), C.orbitMinPolar, C.orbitMaxPolar);
   }

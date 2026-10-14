@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Catapult Siege</string>
+    <string name="title_activity_main">Catapult Siege</string>
+    <string name="package_name">ru.siege.catapult</string>
+    <string name="custom_url_scheme">ru.siege.catapult</string>
+</resources>

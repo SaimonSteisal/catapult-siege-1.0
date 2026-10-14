@@ -21,12 +21,50 @@ npm run balance        # баланс-симуляция 2000 миссий/кл�
 Проверка артефакта: открыть `dist/index.html` в Chrome DevTools device-mode (412×915, touch) —
 игра должна стартовать без сети.
 
+## 1.5. Быстрый старт на Windows (PowerShell) — собрать APK для теста
+Начиная с патча 1.0.12 в репозитории УЖЕ есть: `android/` (сгенерирован `cap add android`),
+`capacitor.config.json` (без TypeScript-зависимости), скрипты `npm run apk:debug/apk:release`.
+
+**Вариант А (самый надёжный, без командной строки):**
+1. Поставь Android Studio (winget install Google.AndroidStudio) — она сама ставит JDK и SDK.
+2. File → Open → выбери папку `android/` проекта. Дождись индексации/синка Gradle (первый раз 5–15 мин).
+3. Подключи телефон (USB-отладка) или создай эмулятор → кнопка Run ▶. Студия сама соберёт и поставит APK.
+
+**Вариант Б (команды, PowerShell 5.1 — обрати внимание: `;` вместо `&&`, `gradlew.bat` вместо `./gradlew`):**
+```powershell
+# один раз: JDK 17 и Android SDK (если ещё нет)
+winget install EclipseAdoptium.Temurin.17.JDK
+winget install Google.AndroidStudio          # ставит и SDK; либо sdkmanager отдельно
+# перезапусти PowerShell и проверь:
+java -version                                 # должно быть 17.x
+
+# в папке проекта:
+npm install
+npm run sync                                  # сборка dist + копирование в android/assets
+cd android
+.\gradlew.bat assembleDebug                  # первый запуск качает Gradle (~5-10 мин)
+# APK здесь:
+#   android\app\build\outputs\apk\debug\app-debug.apk
+```
+Установка на телефон: скопируй `app-debug.apk`, разреши «неизвестные источники», поставь;
+или `adb install -r app-debug.apk`.
+
+**Частые ошибки и лечение:**
+- `Could not find installation of TypeScript` — старый `capacitor.config.ts` в твоей копии:
+  УДАЛИ его, оставь `capacitor.config.json` (или `npm i -D typescript`). Конфиг в JSON не требует TS.
+- `Лексема "&&" не является допустимым разделителем` — PowerShell 5.1: используй `;` или команды выше;
+  в npm-скриптах `&&` работает (npm запускает их через cmd.exe).
+- `SDK location not found` — создай `android/local.properties` со строкой
+  `sdk.dir=C:\Users\<имя>\AppData\Local\Android\Sdk` (путь покажет Android Studio → Settings → SDK).
+- `JAVA_HOME is not set` — поставь Temurin 17 (выше) и перезапусти терминал, либо
+  `$env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"` в текущей сессии.
+
 ## 2. Нативный проект
 ```bash
-npx cap add android     # создаёт android/ (уже закоммичен конфиг capacitor.config.ts)
+npx cap add android     # создаёт android/ (в репозитории УЖЕ есть, повторно не нужно)
 npm run sync            # = npm run build && npx cap sync android
 ```
-`capacitor.config.ts` уже содержит: appId `ru.siege.catapult`, webDir `dist`,
+`capacitor.config.json` содержит: appId `ru.siege.catapult`, webDir `dist`,
 SplashScreen/StatusBar, `webContentsDebuggingEnabled:false`.
 
 ### Правки android/ (проверить после `cap add`)

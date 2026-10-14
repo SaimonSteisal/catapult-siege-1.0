@@ -247,6 +247,25 @@ export class VFX {
     this.hitStop = Math.max(this.hitStop, CFG.ballistics.slowmo.hitstop);
   }
 
+  /** celebratory firework: colored flash + spark crown + smoke */
+  fireworkBurst(pos, colorHex) {
+    const q = this.quality;
+    this.flashes.spawn(pos, { life: 0.22, size: 3.4, grow: 1.5, opacity: 0.95, color: colorHex });
+    const n = Math.round(26 * q);
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + this.rng.range(-0.1, 0.1);
+      const sp = this.rng.range(7, 15);
+      const d = new THREE.Vector3(Math.cos(a) * sp, this.rng.range(2, 8), Math.sin(a) * sp);
+      this.sparks.spawn(pos.clone(), {
+        life: this.rng.range(0.7, 1.3), size: this.rng.range(0.22, 0.4), grow: -0.25, opacity: 0.95,
+        color: this.rng.chance(0.35) ? 0xfff0c0 : colorHex,
+        vel: d, gravity: 11, drag: 0.7,
+      });
+    }
+    this.smokeColumn(pos, Math.round(5 * q), 0.8, 0x5a554c);
+    this.addShake(0.06);
+  }
+
   splash(pos, force = 1) {
     this.dustPuff(pos, Math.round(10 * force * this.quality), 0.8, 0xbfd8e6);
     this.ring(pos, 1.6 * force, 0.9);

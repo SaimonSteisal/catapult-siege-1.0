@@ -105,10 +105,11 @@ export class BattleHUD {
     this.repairBtn = el('button', { class: 'tool-btn', html: `<span class="ic">🛠️</span><span>${t('hud_repair')}</span>` });
     this.inspectBtn = el('button', { class: 'tool-btn', html: `<span class="ic">🔍</span><span>${t('hud_inspect')}</span>` });
     this.precBtn = el('button', { class: 'tool-btn', html: `<span class="ic">🎚️</span><span>${t('hud_aim_mode')}</span>` });
+    this.camBtn = el('button', { class: 'tool-btn', html: `<span class="ic"></span>`, onclick: () => { Audio.uiTap(); this.game.resetCamera(); } });
     this.pauseBtn = el('button', { class: 'tool-btn', html: `<span class="ic">⏸</span>` });
     this.testBtn = el('button', { class: 'tool-btn', title: 'Tester mode', html: `<span class="ic">🧪</span>`, onclick: () => { Audio.uiTap(); this.game.toggleDevPanel(); } });
     this.testBtn.style.display = S().settings.testerMode ? '' : 'none';
-    this.toolRow.append(this.repairBtn, this.inspectBtn, this.precBtn, this.testBtn, this.pauseBtn);
+    this.toolRow.append(this.repairBtn, this.inspectBtn, this.precBtn, this.camBtn, this.testBtn, this.pauseBtn);
 
     right.append(this.skillRow, this.ammoStrip, this.toolRow, this.fireBtn);
     bottom.append(this.aimPad, right);
@@ -158,10 +159,15 @@ export class BattleHUD {
     if (!vp || !this.aimPad) return;
     const vpR = vp.getBoundingClientRect();
     const r = this.aimPad.getBoundingClientRect();
-    const cz = this.cancelEl.getBoundingClientRect();
+    // NOTE: #cancelzone is display:none until a drag starts, so its rect can NOT
+    // be measured here (it was all zeros => cancel never triggered on device).
+    // Derive the centre from the pad rect + the CSS offsets (left:14 bottom:14, 92px).
+    const size = 92, off = 14;
+    const cx = (r.left - vpR.left) + off + size / 2;
+    const cy = (r.top - vpR.top) + r.height - off - size / 2;
     Input.setAimZone(
       { x: r.left - vpR.left, y: r.top - vpR.top, w: r.width, h: r.height },
-      { x: cz.left - vpR.left + cz.width / 2, y: cz.top - vpR.top + cz.height / 2 },
+      { x: cx, y: cy },
       CFG.aim.cancelZonePx
     );
   }
@@ -194,11 +200,11 @@ export class BattleHUD {
       this.knob.style.left = kx + 'px';
       this.knob.style.top = ky + 'px';
       this.knob.style.transform = `translate(-50%,-50%) scale(${1 + this.aimValues.power * 0.35})`;
-      // cancel zone proximity
-      const cz = this.cancelEl.getBoundingClientRect();
-      const px = r.left + kx, py = r.top + ky;
-      const near = Math.hypot(px - (cz.left + cz.width / 2), py - (cz.top + cz.height / 2)) < CFG.aim.cancelZonePx + 22;
-      this.cancelEl.style.background = near ? 'rgba(179,55,44,.5)' : '';
+      // cancel zone proximity (computed centre — the element itself is hidden)
+      const zone = Input.aimCancelCenter;
+      const near = zone && Math.hypot(d.x - zone.x, d.y - zone.y) < CFG.aim.cancelZonePx + 26;
+      this.cancelEl.style.background = near ? 'rgba(179,55,44,.55)' : '';
+      this.cancelEl.style.borderColor = near ? 'rgba(255,120,100,.9)' : '';
     });
     const endAim = () => {
       this.aimPad.classList.remove('active');

@@ -199,15 +199,23 @@ export function createMaterials(scene) {
   M.banner = new THREE.MeshLambertMaterial({ color: 0xb3372c, side: THREE.DoubleSide, flatShading: true });
   M.enemyBanner = new THREE.MeshLambertMaterial({ color: 0x3d5a80, side: THREE.DoubleSide, flatShading: true });
 
-  // sky dome (gradient shader)
+  // sky dome: gradient + sun disc/glow + stars + drifting fbm clouds + aurora,
+  // all in ONE shader (single draw call, no geometry cost)
   M.sky = new THREE.ShaderMaterial({
     side: THREE.BackSide, depthWrite: false, fog: false,
     uniforms: {
       topColor: { value: new THREE.Color(0x5b8fc4) },
       midColor: { value: new THREE.Color(0xa9c6dd) },
       botColor: { value: new THREE.Color(0xe8c9a0) },
-      offset: { value: 0.0 },
-      exponent: { value: 0.72 },
+      sunColor: { value: new THREE.Color(0xffd9a0) },
+      sunDir:   { value: new THREE.Vector3(-0.6, 0.25, 0.3).normalize() },
+      sunSize:  { value: 1.0 },
+      starFactor: { value: 0.0 },
+      cloudCover: { value: 0.22 },
+      cloudColor: { value: new THREE.Color(0xf0ead8) },
+      auroraFactor: { value: 0.0 },
+      haze: { value: 0.3 },
+      time: { value: 0 },
     },
     vertexShader: `
       varying vec3 vWorld;
@@ -217,15 +225,63 @@ export function createMaterials(scene) {
         gl_Position = projectionMatrix * viewMatrix * wp;
       }`,
     fragmentShader: `
-      uniform vec3 topColor; uniform vec3 midColor; uniform vec3 botColor;
-      uniform float offset; uniform float exponent;
+      uniform vec3 topColor, midColor, botColor, sunColor, cloudColor;
+      uniform vec3 sunDir;
+      uniform float sunSize, starFactor, cloudCover, auroraFactor, haze, time;
       varying vec3 vWorld;
+
+      float hash21(vec2 p){ p = fract(p*vec2(233.34, 851.73)); p += dot(p, p+23.45); return fract(p.x*p.y); }
+      float vnoise(vec2 p){
+        vec2 i = floor(p), f = fract(p);
+        f = f*f*(3.0-2.0*f);
+        float a = hash21(i), b = hash21(i+vec2(1,0)), c = hash21(i+vec2(0,1)), d = hash21(i+vec2(1,1));
+        return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);
+      }
+      float fbm(vec2 p){ float s=0.0, a=0.5; for(int i=0;i<4;i++){ s += a*vnoise(p); p*=2.1; a*=0.5; } return s; }
+
       void main(){
-        float h = normalize(vWorld - cameraPosition).y + offset;
-        float t = pow(max(h,0.0), exponent);
-        vec3 col = mix(botColor, midColor, clamp(h*2.2+0.35,0.0,1.0));
-        col = mix(col, topColor, t);
-        gl_FragColor = vec4(col,1.0);
+        vec3 dir = normalize(vWorld - cameraPosition);
+        float h = dir.y;
+        vec3 col = mix(botColor, midColor, clamp(h*2.2+0.35, 0.0, 1.0));
+        col = mix(col, topColor, pow(max(h,0.0), 0.72));
+
+        // sun: crisp disc + wide glow
+        float sd = max(dot(dir, normalize(sunDir)), 0.0);
+        col += sunColor * pow(sd, 1800.0/sunSize) * 1.6;
+        col += sunColor * pow(sd, 10.0) * 0.30 * (1.0-haze*0.5);
+        col += sunColor * pow(sd, 3.0) * 0.08 * haze;
+
+        // stars (only upward, with slow twinkle)
+        if (starFactor > 0.01 && h > 0.0) {
+          vec2 sp = dir.xz / (h + 0.28) * 120.0;
+          vec2 cell = floor(sp);
+          float st = hash21(cell);
+          float tw = 0.55 + 0.45*sin(time*1.7 + st*90.0);
+          float dotp = step(0.9955, st) * smoothstep(0.35, 1.0, st);
+          col += vec3(0.9,0.94,1.0) * dotp * tw * starFactor * smoothstep(0.0,0.22,h);
+        }
+
+        // drifting clouds
+        if (cloudCover > 0.01 && h > 0.015) {
+          vec2 cp = dir.xz / (h + 0.18) * 0.55 + vec2(time*0.0075, time*0.0038);
+          float n = fbm(cp);
+          float c = smoothstep(1.0-cloudCover*0.9, 1.0-cloudCover*0.25, n);
+          vec3 cc = mix(cloudColor, cloudColor*0.72, 0.6-c*0.3);
+          cc += sunColor * pow(sd, 6.0) * 0.35;   // cloud edges catch the sun
+          col = mix(col, cc, c*0.88*smoothstep(0.015,0.22,h));
+        }
+
+        // aurora curtains (night/aurora themes)
+        if (auroraFactor > 0.01 && h > 0.04) {
+          float x = atan(dir.z, dir.x);
+          float band = fbm(vec2(x*1.7 + time*0.05, 3.1)) * fbm(vec2(x*4.3 - time*0.03, 8.7));
+          float vert = smoothstep(0.10, 0.42, h) * smoothstep(0.85, 0.5, h);
+          float a = pow(band, 2.2) * vert * auroraFactor;
+          vec3 ac = mix(vec3(0.25,1.0,0.55), vec3(0.35,0.65,1.0), smoothstep(0.25,0.7,h));
+          col += ac * a * 1.35;
+        }
+
+        gl_FragColor = vec4(col, 1.0);
       }`,
   });
 

@@ -16,7 +16,7 @@ import {
 } from '../systems/progression.js';
 import {
   roster, activeCrew, maxSlots, hire, toggleActive, trainCrew, restCrew, feedCrew, roleName,
-  roleDef, skillName, xpForLevel, crewMods, restAll,
+  roleDef, skillName, xpForLevel, crewMods, restAll, trainCost,
 } from '../systems/crew.js';
 import {
   campRate, campCap, campUpgradeCost, upgradeBuilding, collectBuilding, collectAll, tickCamp,
@@ -109,6 +109,7 @@ BUILDERS.menu = function () {
       mb('💣', t('menu_ammo'), unlockedAmmo().length + '/' + CFG.ammoOrder.length, () => this.show('ammo')),
       mb('🏕️', t('menu_camp'), pendingCamp() > 0 ? `+${fmt(pendingCamp())}` : '', () => this.show('camp')),
       mb('⚙️', t('menu_settings'), '', () => this.show('settings')),
+      mb('🚪', t('menu_exit'), '', () => this.game.exitApp()),
     ])
   );
 
@@ -300,6 +301,7 @@ BUILDERS.results = function ({ report, mission, failed }) {
   const s = S();
   const body = el('div', { class: 'screen-body' });
   const rank = failed ? 'D' : (mission.training ? '✔' : report.rank);
+  if (!failed) spawnConfetti(this.layer);
 
   body.appendChild(el('div', { class: 'center' }, [
     el('div', { class: 'rank-badge ' + rank, text: rank }),
@@ -533,7 +535,7 @@ BUILDERS.crew = function () {
             onclick: () => { const r = toggleActive(c.id); if (!r.ok) { Audio.uiError(); toast(t('locked'), 'bad'); } else { Audio.uiTap(); this.show('crew'); } },
           }),
           el('button', {
-            class: 'btn small ghost', text: `${t('cw_train')} 🪙${CFG.crew.levelCost[c.level] || '—'}`,
+            class: 'btn small ghost', text: `${t('cw_train')} 🪙${trainCost(c.level)}`,
             onclick: () => { const r = trainCrew(c.id); if (r.ok) { Audio.levelUp(); this.show('crew'); } else { Audio.uiError(); toast(r.reason === 'max' ? t('max') : t('not_enough'), 'bad'); } },
           }),
           el('button', { class: 'btn small ghost', text: t('cw_rest'), onclick: () => { restCrew(c.id); Audio.uiBuy(); this.show('crew'); } }),
@@ -596,7 +598,7 @@ BUILDERS.camp = function () {
       el('div', { class: 'ic', text: icons[key] }),
       el('div', { class: 'info' }, [
         el('div', { class: 'row spread' }, [el('span', { class: 'nm', text: def.ru }), el('span', { class: 'tag', text: lvl ? `${t('level')} ${lvl}` : t('locked') })]),
-        lvl ? el('div', { class: 'small muted', text: `${t('cp_rate')}: ${def.base * Math.pow(def.growth, lvl - 1).toFixed(1)} · ${t('cp_stored')}: ${fmt(b.stored || 0)}/${fmt(cap)} ${RES.icon[def.res]}` })
+        lvl ? el('div', { class: 'small muted', text: `${t('cp_rate')}: ${campRate(key, lvl).toFixed(1)} · ${t('cp_stored')}: ${fmt(b.stored || 0)}/${fmt(cap)} ${RES.icon[def.res]}` })
           : el('div', { class: 'small muted', text: '—' }),
         lvl ? (() => { const bar = el('div', { class: 'bar thin', style: { marginTop: '5px' } }); bar.appendChild(el('i', { style: { width: pct((b.stored || 0) / cap) + '%' } })); return bar; })() : null,
         el('div', { class: 'row wrap', style: { gap: '6px', marginTop: '7px' } }, [
@@ -758,8 +760,28 @@ BUILDERS.pause = function ({ onResume }) {
     el('button', { class: 'btn ghost', style: { width: '100%' }, text: t('st_title'), onclick: () => this.show('settings') }),
     el('button', { class: 'btn ghost', style: { width: '100%' }, text: t('pz_restart'), onclick: async () => { if (await confirmBox(t('pz_restart'), t('pz_retreat_warn'), t('confirm'), t('cancel'))) { Audio.uiTap(); this.game.restartMission(); } } }),
     el('button', { class: 'btn danger', style: { width: '100%' }, text: t('pz_retreat'), onclick: async () => { if (await confirmBox(t('pz_retreat'), t('pz_retreat_warn'), t('confirm'), t('cancel'))) { Audio.uiBack(); this.game.endMission(false, true); } } }),
+    el('button', { class: 'btn ghost', style: { width: '100%' }, text: t('menu_exit'), onclick: async () => { if (await confirmBox(t('menu_exit'), 'Закрыть приложение? Прогресс сохранён.', t('confirm'), t('cancel'))) this.game.exitApp(true); } }),
   );
   return this.screen('', [this.head(t('pz_title'), () => onResume()), body]);
 };
+
+/** DOM confetti burst for victory screens */
+function spawnConfetti(root) {
+  const wrap = el('div', { class: 'confetti' });
+  const colors = ['#d9a62e', '#b3372c', '#5c8a3a', '#4a8fb5', '#e8dcc0', '#8a6ab3'];
+  for (let i = 0; i < 70; i++) {
+    const p = el('i');
+    p.style.left = Math.random() * 100 + '%';
+    p.style.background = colors[i % colors.length];
+    p.style.animationDelay = (Math.random() * 1.4).toFixed(2) + 's';
+    p.style.animationDuration = (2.4 + Math.random() * 2.2).toFixed(2) + 's';
+    p.style.transform = `rotate(${Math.random() * 360}deg)`;
+    p.style.width = (5 + Math.random() * 7) + 'px';
+    p.style.height = (8 + Math.random() * 10) + 'px';
+    wrap.appendChild(p);
+  }
+  root.appendChild(wrap);
+  setTimeout(() => wrap.remove(), 6000);
+}
 
 export const BUILD_HASH = typeof __BUILD_HASH__ !== 'undefined' ? __BUILD_HASH__ : 'dev';

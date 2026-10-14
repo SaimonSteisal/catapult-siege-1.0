@@ -37,6 +37,10 @@ const DICT = {
   menu_settings: ['Настройки', 'Settings'],
   menu_continue: ['Продолжить', 'Continue'],
   menu_reset: ['Сбросить прогресс', 'Reset progress'],
+  menu_exit: ['Выход из игры', 'Exit game'],
+  vic_title: ['ПОБЕДА!', 'VICTORY!'],
+  vic_sub: ['Крепость пала. Отчёт снабженца ждёт.', 'The fort has fallen. The quartermaster awaits.'],
+  cam_reset: ['Сброс камеры', 'Reset camera'],
   menu_reset_warn: ['Весь прогресс будет удалён. Продолжить?', 'All progress will be erased. Continue?'],
 
   // briefing

@@ -9,11 +9,11 @@ import { FortBuilder } from './fort.js';
 const MC = CFG.missions;
 
 const BIOMES = {
-  1: ['meadow', 'meadow', 'meadow'],
-  2: ['river', 'meadow', 'river'],
-  3: ['mountain', 'meadow', 'river'],
+  1: ['meadow', 'meadow', 'autumn'],
+  2: ['river', 'desert', 'river'],
+  3: ['mountain', 'autumn', 'river'],
   4: ['winter', 'winter', 'mountain'],
-  5: ['mountain', 'winter', 'coast'],
+  5: ['volcano', 'winter', 'coast'],
 };
 
 const SCHEME_BY_CHAPTER = {
