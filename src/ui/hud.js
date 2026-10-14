@@ -8,6 +8,7 @@ import { clamp, fmt, pct } from '../core/utils.js';
 import { Input } from '../core/input.js';
 import { Audio } from '../core/audio.js';
 import { S } from '../core/save.js';
+import { roleDef } from '../systems/crew.js';
 import { vibrate } from '../core/utils.js';
 
 const RES = CFG.resources;
@@ -105,7 +106,7 @@ export class BattleHUD {
     this.repairBtn = el('button', { class: 'tool-btn', html: `<span class="ic">🛠️</span><span>${t('hud_repair')}</span>` });
     this.inspectBtn = el('button', { class: 'tool-btn', html: `<span class="ic">🔍</span><span>${t('hud_inspect')}</span>` });
     this.precBtn = el('button', { class: 'tool-btn', html: `<span class="ic">🎚️</span><span>${t('hud_aim_mode')}</span>` });
-    this.camBtn = el('button', { class: 'tool-btn', html: `<span class="ic"></span>`, onclick: () => { Audio.uiTap(); this.game.resetCamera(); } });
+    this.camBtn = el('button', { class: 'tool-btn', title: t('cam_reset'), html: `<span class="ic">⌂</span>`, onclick: () => { Audio.uiTap(); this.game.resetCamera(); } });
     this.pauseBtn = el('button', { class: 'tool-btn', html: `<span class="ic">⏸</span>` });
     this.testBtn = el('button', { class: 'tool-btn', title: 'Tester mode', html: `<span class="ic">🧪</span>`, onclick: () => { Audio.uiTap(); this.game.toggleDevPanel(); } });
     this.testBtn.style.display = S().settings.testerMode ? '' : 'none';
@@ -118,6 +119,10 @@ export class BattleHUD {
     // fps
     this.fpsEl = el('div', { id: 'fps' });
     this.node.appendChild(this.fpsEl);
+
+    // sound subtitles (accessibility setting `subtitles`)
+    this.subsEl = el('div', { id: 'subs' });
+    this.node.appendChild(this.subsEl);
 
     this.root.appendChild(this.node);
     this._buildPrecision();
@@ -162,14 +167,27 @@ export class BattleHUD {
     // NOTE: #cancelzone is display:none until a drag starts, so its rect can NOT
     // be measured here (it was all zeros => cancel never triggered on device).
     // Derive the centre from the pad rect + the CSS offsets (left:14 bottom:14, 92px).
+    // Left-handed mode mirrors the zone to the right side (see style.css).
     const size = 92, off = 14;
-    const cx = (r.left - vpR.left) + off + size / 2;
+    const leftHanded = !!S().settings.leftHanded;
+    const cx = leftHanded
+      ? (r.left - vpR.left) + r.width - off - size / 2
+      : (r.left - vpR.left) + off + size / 2;
     const cy = (r.top - vpR.top) + r.height - off - size / 2;
     Input.setAimZone(
       { x: r.left - vpR.left, y: r.top - vpR.top, w: r.width, h: r.height },
       { x: cx, y: cy },
       CFG.aim.cancelZonePx
     );
+  }
+
+  /** sound subtitles — visible captions of key audio events (a11y setting) */
+  subtitle(text) {
+    if (!S().settings.subtitles || !this.subsEl) return;
+    this.subsEl.textContent = text;
+    this.subsEl.classList.add('on');
+    clearTimeout(this._subsT);
+    this._subsT = setTimeout(() => this.subsEl.classList.remove('on'), 1900);
   }
 
   // ------------------------------------------------------------------- bind ---
@@ -220,7 +238,8 @@ export class BattleHUD {
     this.pauseBtn.addEventListener('click', () => { Audio.uiBack(); this.game.onPause(); });
     this.inspectBtn.addEventListener('click', () => { Audio.uiTap(); this.toggleNodes(); });
     this.precBtn.addEventListener('click', () => { Audio.uiTap(); this.togglePrecision(); });
-    holdButton(this.repairBtn, CFG.settings_repairHold || 700, () => this.game.onRepair(true), (k) => { this.repairBtn.style.background = `linear-gradient(90deg, rgba(92,138,58,.55) ${k * 100}%, rgba(20,16,12,.8) ${k * 100}%)`; });
+    holdButton(this.repairBtn, CFG.settings_repairHold || 700, () => this.game.onRepair(true), (k) => { this.repairBtn.style.background = `linear-gradient(90deg, rgba(92,138,58,.55) ${k * 100}%, rgba(20,16,12,.8) ${k * 100}%)`; },
+      () => { Audio.uiError(); toast(t('hint_hold_repair'), '', 2000); });
   }
 
   // ------------------------------------------------------------------ state ---
@@ -265,7 +284,10 @@ export class BattleHUD {
 
   setWind(hud) {
     this.windArrow.setAttribute('transform', `rotate(${(hud.dirDeg + 180).toFixed(0)} 26 26)`);
-    this.windSpeed.textContent = `${hud.speed.toFixed(1)} м/с`;
+    // «Чтец ветра»: forecast 3 s ahead next to the current speed
+    this.windSpeed.textContent = hud.forecast !== undefined
+      ? `${hud.speed.toFixed(1)} → ${hud.forecast.toFixed(1)} м/с`
+      : `${hud.speed.toFixed(1)} м/с`;
     this.windSpeed.style.color = hud.speed > 8 ? '#ffb0a0' : hud.speed > 4 ? '#ffd27a' : '';
   }
 
@@ -343,8 +365,9 @@ export class BattleHUD {
     const crew = this.game.activeCrewList();
     const icons = { gunner: '🎯', loader: '💪', engineer: '🛠️', commander: '📯' };
     for (const c of crew) {
+      const cd = (roleDef(c.role) || { skill: { cd: 30 } }).skill.cd;
       const b = el('div', {
-        class: 'skill-btn', dataset: { id: c.id },
+        class: 'skill-btn', dataset: { id: c.id, cd: String(cd) },
         html: `<span>${icons[c.role] || '★'}</span><span class="cd"></span><span class="lbl">${c.name.slice(0, 6)}</span>`,
         onclick: () => { const r = this.game.useSkill(c.id); if (!r.ok) { Audio.uiError(); toast(r.reason === 'cooldown' ? `${Math.ceil(r.left)}с` : t('cw_tired'), 'bad'); } },
       });
@@ -359,8 +382,9 @@ export class BattleHUD {
       if (!id) continue;
       const left = map[id] || 0;
       const cd = node.querySelector('.cd');
+      // per-skill cooldown length (was hardcoded to 30 — wrong for 45/60/90 s skills)
+      const total = parseFloat(node.dataset && node.dataset.cd) || 30;
       if (left > 0) {
-        const total = 30;
         cd.style.setProperty('--p', clamp((left / total) * 100, 0, 100) + '%');
         cd.style.background = `conic-gradient(rgba(0,0,0,.72) ${clamp((left / total) * 100, 0, 100)}%, transparent 0)`;
         node.style.opacity = '.62';

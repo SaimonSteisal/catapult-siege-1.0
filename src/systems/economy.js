@@ -13,14 +13,18 @@ export class Economy {
     this.reset();
   }
 
-  /** begin a sortie with a supply budget derived from the mission */
-  beginMission(mission) {
+  /** begin a sortie with a supply budget derived from the mission.
+   *  `supplyOverride` is the effective budget computed by the game (mission
+   *  supply + tech/synergy bonuses). It MUST match what the briefing showed —
+   *  recalculating from the chapter base here ignored ECONOMY/trial/training
+   *  adjustments and mods (training promised 1350 but only granted 150). */
+  beginMission(mission, supplyOverride = null) {
     this.mission = mission;
-    const base = M.supplyBase + (mission.chapter - 1) * M.supplyPerChapter;
-    const modSupply = mission.mod ? mission.mod.supply : 1;
-    const bonus = mission.mods && mission.mods.quartermaster ? 1 : 0;
-    this.budget = Math.round(base * modSupply * (1 + bonus * 0.12));
+    this.budget = supplyOverride != null
+      ? supplyOverride
+      : (mission.supply != null ? mission.supply : M.supplyBase);
     this.spentSupply = 0;
+    this.survivedSeconds = 0;    // read by the 'survive' objective (DEFEND)
     this.spentValue = 0;
     this.gainedValue = 0;
     this.loot = {};
@@ -41,6 +45,7 @@ export class Economy {
 
   reset() {
     this.budget = 0; this.spentSupply = 0; this.spentValue = 0; this.gainedValue = 0;
+    this.survivedSeconds = 0;
     this.loot = {}; this.coinsGained = 0; this.shots = 0; this.hits = 0;
     this.blocksDestroyed = 0; this.targetsDestroyed = 0; this.civilianDestroyed = 0;
     this.repairs = 0; this.repairValue = 0; this.perfectShots = 0; this.wearAccumulated = 0;
@@ -119,8 +124,7 @@ export class Economy {
     if (bounty > 0) this.addBounty(Math.round(bounty * (this.mission && this.mission.mod ? (this.mission.mod.reward || 1) : 1)));
     if (this.civilianDestroyed > 0) this.penalise(this.civilianDestroyed * CFG.blocks.civilianPenaltyCoins, 'civilians');
 
-    // coin value of gathered resources
-    this.gainedValue = lootToCoins(this.loot) + Math.max(0, this.coinsGained) * 0.0 + this.coinsGained * 0;
+    // coin value of gathered resources (loot.coins already holds the bounties)
     const resourceValue = lootToCoins({ ...this.loot, coins: 0 });
     this.gainedValue = resourceValue + Math.max(0, this.coinsGained);
 
@@ -177,10 +181,11 @@ export class Economy {
   /** actually grant the rewards to the persistent save */
   payout(report, mods = {}) {
     const s = S();
-    const lootMul = mods.loot || 1;
+    // loot was ALREADY multiplied by mods.loot in collectLoot()/finish() —
+    // multiplying again here double-dipped the crew-branch bonus
     for (const k in report.loot) {
       if (k === 'coins') continue;
-      addResource(k, Math.round(report.loot[k] * lootMul));
+      addResource(k, Math.round(report.loot[k]));
     }
     addResource('coins', report.coins);
     s.stats.coinsEarned += report.coins;

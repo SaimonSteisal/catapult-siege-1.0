@@ -71,9 +71,11 @@ export function confirmBox(title, text, okLabel = 'OK', cancelLabel = '—') {
   });
 }
 
-/** simple hold-to-activate button (repair) */
-export function holdButton(node, ms, onHold, onTick) {
-  let raf = 0, t0 = 0, holding = false;
+/** simple hold-to-activate button (repair).
+ *  onQuickTap fires on any release that did NOT complete the hold, so the
+ *  button always explains itself instead of silently doing nothing. */
+export function holdButton(node, ms, onHold, onTick, onQuickTap) {
+  let raf = 0, t0 = 0, holding = false, completed = false;
   const start = (e) => {
     e.preventDefault();
     holding = true; t0 = performance.now();
@@ -83,17 +85,24 @@ export function holdButton(node, ms, onHold, onTick) {
       const k = Math.min(1, (performance.now() - t0) / ms);
       if (onTick) onTick(k);
       node.style.setProperty('--p', (k * 100) + '%');
-      if (k >= 1) { holding = false; node.classList.remove('holding'); onHold(); return; }
+      if (k >= 1) { holding = false; completed = true; node.classList.remove('holding'); onHold(); return; }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
   };
-  const stop = () => { holding = false; cancelAnimationFrame(raf); node.classList.remove('holding'); node.style.setProperty('--p', '0%'); if (onTick) onTick(0); };
+  const stop = (silent) => {
+    holding = false; cancelAnimationFrame(raf); node.classList.remove('holding'); node.style.setProperty('--p', '0%');
+    if (onTick) onTick(0);
+    // any release that did NOT complete the hold explains itself (no silent dead zone);
+    // `silent` is for touchcancel — the system stole the gesture, no hint needed
+    if (onQuickTap && t0 && !completed && !silent) onQuickTap();
+    t0 = 0; completed = false;
+  };
   node.addEventListener('touchstart', start, { passive: false });
-  node.addEventListener('touchend', stop);
-  node.addEventListener('touchcancel', stop);
+  node.addEventListener('touchend', () => stop(false));
+  node.addEventListener('touchcancel', () => stop(true));
   node.addEventListener('mousedown', start);
-  window.addEventListener('mouseup', stop);
+  window.addEventListener('mouseup', () => stop(false));
   return { stop };
 }
 

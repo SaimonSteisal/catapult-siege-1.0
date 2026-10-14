@@ -10,7 +10,7 @@
 положение и открывает апгрейды.
 
 ## Быстрый старт (в т.ч. из VS Code)
-- **VS Code / Live Server:** откройте папку проекта и запустите Live Server от корневого `index.html` — он перенаправит на собранный `dist/index.html`. Корневой редирект существует именно для этого.
+- **VS Code / Live Server:** откройте папку проекта и запустите Live Server от корневого `index.html` — он перенаправит на собранный `dist/index.html`. Если `dist/` ещё нет (свежий клон), корневая страница покажет инструкцию по сборке вместо мёртвого редиректа.
 - **Не открывайте `src/index.html` напрямую** (file:// или Live Server от `src/`): это исходник с ES-модулями и внешним CSS — браузер заблокирует модули без сборщика.
 - Альтернатива без сервера: просто откройте `dist/index.html` двойным кликом — сборка полностью самодостаточна (инлайн CSS+JS, 0 запросов).
 
@@ -22,15 +22,20 @@ npm run dev        # сборка + локальный сервер http://local
 npm test           # 25 headless-юнитов (физика/детерминизм/экономика)
 npm run balance    # Monte-Carlo баланс 30 000 миссий
 node tools/test-browser.mjs   # E2E в headless Chrome + скриншоты в shots/
+node tools/debug/preview-check.mjs   # проверка запуска dist по file:// и в sandboxed-iframe (превью)
+node tools/debug/verify-fixes.mjs    # регресс-сьют UI/настроек (23 проверки)
 ```
 Открой `dist/index.html` на телефоне в Chrome — играется сразу (touch-управление).
 
 ## Android APK/AAB
 ```bash
-npm run sync                 # build + cap sync android
-cd android && ./gradlew assembleRelease
+npm install                # один раз
+npm run sync               # build + cap sync android (dist → android/assets)
+npm run apk:debug          # кроссплатформенно: node tools/gradle.mjs assembleDebug
+# APK: android/app/build/outputs/apk/debug/app-debug.apk
 ```
-Подробности, правки манифеста, подпись, чек-лист Play Console — `docs/ANDROID_BUILD.md`.
+Или откройте папку `android/` в Android Studio → Run ▶. Требования: JDK 17, Android SDK 34.
+Подробности, правки манифеста, подпись, чек-лист Play Console, лечение частых ошибок — `docs/ANDROID_BUILD.md`.
 
 ## Документация полного цикла
 | Файл | Содержание |

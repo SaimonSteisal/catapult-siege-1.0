@@ -42,7 +42,12 @@ export class UI {
     const builder = BUILDERS[name];
     if (!builder) return;
     const node = builder.call(this, params);
-    if (node) { node.style.pointerEvents = 'auto'; this.layer.appendChild(node); }
+    if (node) {
+      // see-through screens (main menu) stay click-through so the player can
+      // orbit the camp scene behind them; interactive parts opt back in via CSS
+      node.style.pointerEvents = node.classList.contains('see-through') ? 'none' : 'auto';
+      this.layer.appendChild(node);
+    }
     if (name && name !== 'none') this.game.onScreen && this.game.onScreen(name);
   }
 
@@ -101,8 +106,14 @@ BUILDERS.menu = function () {
     mb('⚔️', t('menu_continue'), next ? `${chapterName(next.chapter, s.lang)} · ${next.title}` : t('menu_campaign'), () => this.show('briefing', { mission: next || generateMission(1, 0) }), 'primary wide'),
     el('div', { class: 'menu-grid' }, [
       mb('🗺️', t('menu_campaign'), `${S().lang === 'en' ? 'Missions' : 'Миссии'}: ${Object.keys(s.progress.bestRank).length}/40`, () => this.show('contracts')),
-      mb('📅', t('menu_daily'), s.progress.daily.done ? '✓' : '!', () => this.show('briefing', { mission: dailyContract() })),
-      mb('🎯', t('menu_trial'), `${s.progress.daily.trials || 0}/3`, () => this.show('briefing', { mission: trialMission() })),
+      mb('📅', t('menu_daily'), s.progress.daily.done ? '✓' : '!', () => {
+        if (S().progress.daily.done) { Audio.uiError(); toast(t('daily_done'), '', 2400); return; }
+        this.show('briefing', { mission: dailyContract() });
+      }),
+      mb('🎯', t('menu_trial'), `${s.progress.daily.trials || 0}/3`, () => {
+        if ((S().progress.daily.trials || 0) >= 3) { Audio.uiError(); toast(t('trial_limit'), 'bad', 2400); return; }
+        this.show('briefing', { mission: trialMission() });
+      }),
       mb('🏹', t('menu_training'), '∞', () => this.show('briefing', { mission: trainingMission() })),
       mb('📐', t('menu_workshop'), `${S().lang === 'en' ? 'Nodes' : 'Узлы'}: ${countOwnedTech()}/${TECH_NODE_COUNT}`, () => this.show('workshop')),
       mb('👥', t('menu_crew'), `${S().lang === 'en' ? 'On duty' : 'В строю'}: ${activeCrew().length}/${maxSlots()}`, () => this.show('crew')),
@@ -151,7 +162,7 @@ BUILDERS.contracts = function () {
       const tile = el('button', {
         class: 'mission-tile' + (m.unlocked ? '' : ' locked') + (m.done ? ' done' : '') + (m.isBoss ? ' boss' : ''),
         html: `<span class="k">${kindShort}</span><b>${m.index + 1}</b>${m.rank ? `<span class="rk">${m.rank}</span>` : ''}`,
-        onclick: () => { if (!m.unlocked) { Audio.uiError(); return; } Audio.uiTap(); this.show('briefing', { mission: m }); },
+        onclick: () => { if (!m.unlocked) { Audio.uiError(); toast(t('mission_locked'), 'bad', 2200); return; } Audio.uiTap(); this.show('briefing', { mission: m }); },
       });
       grid.appendChild(tile);
     }
@@ -165,6 +176,9 @@ BUILDERS.contracts = function () {
 BUILDERS.briefing = function ({ mission }) {
   const s = S();
   if (!mission) { this.show('menu'); return null; }
+  // daily/trial are limited per day — block re-entry via «Retry» on the results
+  if (mission.isDaily && s.progress.daily.done) { Audio.uiError(); toast(t('daily_done'), '', 2400); this.show('menu'); return null; }
+  if (mission.isTrial && (s.progress.daily.trials || 0) >= 3) { Audio.uiError(); toast(t('trial_limit'), 'bad', 2400); this.show('menu'); return null; }
   const game = this.game;
   const loadout = mission._loadout || { supply: mission.supply, ammo: {} };
   mission._loadout = loadout;
@@ -335,10 +349,17 @@ BUILDERS.results = function ({ report, mission, failed }) {
   body.appendChild(loot);
 
   const row = el('div', { class: 'row wrap', style: { gap: '8px', marginTop: '4px' } });
-  if (!mission.training && !failed) {
+  // `doubled` guard: the rewarded-double button must be one-shot, otherwise it
+  // re-renders on the refreshed screen and mints coins forever
+  if (!mission.training && !failed && !report.doubled) {
     row.appendChild(el('button', {
       class: 'btn gold grow', text: t('res_double'),
-      onclick: () => { Audio.coins(6); addResource('coins', report.coins); toast(`+${report.coins} 🪙`, 'good'); this.show('results', { report: { ...report, coins: report.coins * 2, doubled: true }, mission, failed, _noDouble: true }); },
+      onclick: () => {
+        Audio.coins(6);
+        addResource('coins', report.coins);
+        toast(`+${report.coins} 🪙`, 'good');
+        this.show('results', { report: { ...report, coins: report.coins * 2, doubled: true }, mission, failed });
+      },
     }));
   }
   row.appendChild(el('button', { class: 'btn ghost grow', text: t('res_again'), onclick: () => { Audio.uiTap(); this.show('briefing', { mission }); } }));
@@ -669,9 +690,20 @@ BUILDERS.ammo = function () {
 };
 
 // ---------------------------------------------------------------- SETTINGS --
-BUILDERS.settings = function () {
+// `origin` tells where "back" must return to: opening settings from the pause
+// menu used to drop the player into the main menu — i.e. it silently kicked
+// them out of the battle. Now the screen remembers its entry point.
+BUILDERS.settings = function (params = {}) {
   const s = S();
   const set = s.settings;
+  const origin = params.origin || 'menu';
+  const back = () => {
+    if (origin === 'pause') {
+      // the battle might have ended while settings were open (pending-end timers)
+      if (this.game.inBattle) this.game.onPause();
+      else this.show('menu');
+    } else this.show(origin);
+  };
   const body = el('div', { class: 'screen-body' });
 
   const section = (title) => { const c = el('div', { class: 'card' }); c.appendChild(el('h2', { text: title })); body.appendChild(c); return c; };
@@ -687,11 +719,19 @@ BUILDERS.settings = function () {
     inp.addEventListener('change', () => Audio.uiTap());
     parent.appendChild(el('div', { class: 'setting' }, [el('div', { class: 'nm', text: label }), val, inp]));
   };
-  const seg = (parent, label, key, options) => {
+  const seg = (parent, label, key, options, opt = {}) => {
+    const getV = opt.get || (() => set[key]);
     const wrap = el('div', { class: 'seg' });
-    const upd = () => { for (const b of wrap.children) b.classList.toggle('on', b.dataset.v === String(set[key])); };
+    const upd = () => { for (const b of wrap.children) b.classList.toggle('on', b.dataset.v === String(getV())); };
     for (const o of options) {
-      const b = el('button', { dataset: { v: o.v }, text: o.l, onclick: () => { set[key] = o.v; upd(); Audio.uiTap(); Save.markDirty(); this.game.applySettings(); } });
+      const b = el('button', {
+        dataset: { v: o.v }, text: o.l,
+        onclick: () => {
+          if (opt.onPick) opt.onPick(o.v); else set[key] = o.v;
+          upd(); Audio.uiTap(); Save.markDirty(); this.game.applySettings();
+          if (opt.rebuild) this.show('settings', params);   // refresh dependent widgets
+        },
+      });
       wrap.appendChild(b);
     }
     upd();
@@ -699,7 +739,10 @@ BUILDERS.settings = function () {
   };
 
   const g = section(t('st_graphics'));
-  seg(g, t('st_quality'), 'quality', [{ v: 0, l: t('st_q_high') }, { v: 1, l: t('st_q_med') }, { v: 2, l: t('st_q_low') }]);
+  // manual quality pick turns the auto-tuner off (otherwise it silently
+  // overrides the user's choice on the next frame measurement)
+  seg(g, t('st_quality'), 'quality', [{ v: 0, l: t('st_q_high') }, { v: 1, l: t('st_q_med') }, { v: 2, l: t('st_q_low') }],
+    { onPick: (v) => { set.quality = v; set.autoQuality = false; }, rebuild: true });
   toggle(g, t('st_quality_auto'), 'autoQuality');
   toggle(g, t('st_camera_dynamic'), 'cameraDynamic');
   toggle(g, t('st_fps'), 'showFps', (v) => { CFG.dev.showFps = v; });
@@ -727,21 +770,50 @@ BUILDERS.settings = function () {
   seg(acc, t('st_colorblind'), 'colorBlind', [{ v: 'off', l: '—' }, { v: 'deuteranopia', l: 'D' }, { v: 'protanopia', l: 'P' }, { v: 'tritanopia', l: 'T' }]);
   toggle(acc, t('st_reduce_motion'), 'reduceMotion');
   toggle(acc, t('st_subtitles'), 'subtitles');
-  seg(acc, t('st_lang'), 'langRoot', [{ v: 'ru', l: 'RU' }, { v: 'en', l: 'EN' }]);
-  // language is stored on the save root, not in settings
-  const langWrap = acc.lastChild;
-  for (const b of langWrap.querySelectorAll('button')) {
-    b.classList.toggle('on', b.dataset.v === S().lang);
-    b.onclick = () => { S().lang = b.dataset.v; Save.markDirty(); Audio.uiTap(); this.show('settings'); this.game.applySettings(); };
-  }
+  // language lives on the save root (S().lang), not inside settings
+  seg(acc, t('st_lang'), null, [{ v: 'ru', l: 'RU' }, { v: 'en', l: 'EN' }], {
+    get: () => S().lang || 'ru',
+    onPick: (v) => { S().lang = v; },
+    rebuild: true,   // re-render the screen so every label switches language
+  });
 
   const dev = section(t('st_debug'));
   toggle(dev, '🧪 Режим тестера (панель механик в бою)', 'testerMode', (v) => { this.game.syncTesterUi(); });
   toggle(dev, 'God mode (ресурсы ∞)', 'godMode', (v) => { CFG.dev.godMode = v; });
   toggle(dev, 'Мгновенный взвод', 'instantCock', (v) => { CFG.dev.instantCock = v; });
   dev.appendChild(el('div', { class: 'row wrap', style: { gap: '6px', marginTop: '8px' } }, [
-    el('button', { class: 'btn small ghost', text: 'Экспорт сейва', onclick: async () => { const str = Save.export(); try { await navigator.clipboard.writeText(str); toast('Скопировано', 'good'); } catch (e) { await modal({ title: 'Save', body: `<textarea style="width:100%;height:120px">${str}</textarea>` }); } } }),
-    el('button', { class: 'btn small ghost', text: 'Импорт сейва', onclick: async () => { const str = prompt('Вставьте код сейва'); if (str && Save.import(str)) { toast('OK', 'good'); this.show('menu'); } else toast('Ошибка', 'bad'); } }),
+    el('button', {
+      class: 'btn small ghost', text: 'Экспорт сейва',
+      onclick: async () => {
+        const str = Save.export();
+        try { await navigator.clipboard.writeText(str); toast('Скопировано', 'good'); }
+        catch (e) {
+          const ta = el('textarea', { style: 'width:100%;height:120px' });
+          ta.value = str;
+          await modal({
+            title: 'Save', dismissable: false,
+            body: el('div', {}, [el('div', { class: 'small muted', style: { marginBottom: '6px' }, text: 'Скопируйте код сейва:' }), ta]),
+            actions: [{ label: t('close'), value: true, class: 'primary' }],
+          });
+        }
+      },
+    }),
+    el('button', {
+      class: 'btn small ghost', text: 'Импорт сейва',
+      // window.prompt() is a no-op in Android WebView — use a real modal instead
+      onclick: async () => {
+        const ta = el('textarea', { style: 'width:100%;height:120px' });
+        const ok = await modal({
+          title: 'Импорт сейва',
+          body: el('div', {}, [el('div', { class: 'small muted', style: { marginBottom: '6px' }, text: 'Вставьте код сейва:' }), ta]),
+          actions: [{ label: t('cancel'), value: false, class: 'ghost' }, { label: t('ok'), value: true, class: 'primary' }],
+        });
+        if (!ok) return;
+        const str = (ta.value || '').trim();
+        if (str && Save.import(str)) { toast('OK', 'good'); this.game.applySettings(); this.show('menu'); }
+        else toast('Ошибка импорта', 'bad');
+      },
+    }),
     el('button', {
       class: 'btn small danger', text: t('st_reset'),
       onclick: async () => { if (await confirmBox(t('menu_reset'), t('menu_reset_warn'), t('confirm'), t('cancel'))) { Save.reset(); location.reload(); } },
@@ -749,7 +821,7 @@ BUILDERS.settings = function () {
   ]));
   dev.appendChild(el('div', { class: 'small muted', style: { marginTop: '8px' }, text: `v${CFG.VERSION} · ${TECH_NODE_COUNT} узлов · build ${BUILD_HASH}` }));
 
-  return this.screen('', [this.head(t('st_title'), () => this.show('menu')), body]);
+  return this.screen('', [this.head(t('st_title'), back), body]);
 };
 
 // ------------------------------------------------------------------- PAUSE --
@@ -757,7 +829,7 @@ BUILDERS.pause = function ({ onResume }) {
   const body = el('div', { class: 'screen-body center', style: { display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '10px' } });
   body.append(
     el('button', { class: 'btn primary', style: { width: '100%', minHeight: '56px' }, text: t('pz_resume'), onclick: () => { Audio.uiTap(); onResume(); } }),
-    el('button', { class: 'btn ghost', style: { width: '100%' }, text: t('st_title'), onclick: () => this.show('settings') }),
+    el('button', { class: 'btn ghost', style: { width: '100%' }, text: t('st_title'), onclick: () => { Audio.uiTap(); this.show('settings', { origin: 'pause' }); } }),
     el('button', { class: 'btn ghost', style: { width: '100%' }, text: t('pz_restart'), onclick: async () => { if (await confirmBox(t('pz_restart'), t('pz_retreat_warn'), t('confirm'), t('cancel'))) { Audio.uiTap(); this.game.restartMission(); } } }),
     el('button', { class: 'btn danger', style: { width: '100%' }, text: t('pz_retreat'), onclick: async () => { if (await confirmBox(t('pz_retreat'), t('pz_retreat_warn'), t('confirm'), t('cancel'))) { Audio.uiBack(); this.game.endMission(false, true); } } }),
     el('button', { class: 'btn ghost', style: { width: '100%' }, text: t('menu_exit'), onclick: async () => { if (await confirmBox(t('menu_exit'), 'Закрыть приложение? Прогресс сохранён.', t('confirm'), t('cancel'))) this.game.exitApp(true); } }),

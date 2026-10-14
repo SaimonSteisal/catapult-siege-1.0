@@ -213,6 +213,18 @@ const DICT = {
   hint_no_supply: ['Нет снабжения на выстрел', 'No supply left for a shot'],
   hint_sling_broke: ['Стропа порвалась!', 'The sling snapped!'],
   hint_frame_broke: ['Рама рухнула! Осадный расчёт отступает', 'The frame collapsed! The crew retreats'],
+  hint_distract: ['Улей отвлёк расчёты вражеских орудий', 'The hive distracted the enemy gun crews'],
+  hint_hold_repair: ['Удерживайте «Ремонт» ~0,7 с — быстрым нажатием он не срабатывает', 'Hold «Repair» for ~0.7 s — a quick tap does nothing'],
+  mission_locked: ['Закрыто: сначала пройдите предыдущую миссию', 'Locked: complete the previous mission first'],
+  daily_done: ['Контракт дня выполнен — возвращайтесь завтра', 'Daily contract complete — come back tomorrow'],
+  trial_limit: ['Испытания на сегодня закончились (3/3)', 'No trials left today (3/3)'],
+
+  // sound subtitles (accessibility)
+  sub_shot: ['Выстрел!', 'Shot fired!'],
+  sub_hit: ['Попадание по крепости', 'Impact on the fort'],
+  sub_node: ['Удар по орудию!', 'The engine is hit!'],
+  sub_victory: ['Победные фанфары', 'Victory fanfare'],
+  sub_defeat: ['Горн отступления', 'Retreat horn'],
 
   // mission kinds
   kind_DEMOLISH: ['Снос', 'Demolition'],

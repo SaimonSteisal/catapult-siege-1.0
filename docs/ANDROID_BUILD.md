@@ -41,8 +41,9 @@ java -version                                 # должно быть 17.x
 # в папке проекта:
 npm install
 npm run sync                                  # сборка dist + копирование в android/assets
-cd android
-.\gradlew.bat assembleDebug                  # первый запуск качает Gradle (~5-10 мин)
+npm run apk:debug                             # = node tools/gradle.mjs assembleDebug
+                                              # (кроссплатформенно: сам выберет gradlew/gradlew.bat,
+                                              #  первый запуск качает Gradle ~5-10 мин)
 # APK здесь:
 #   android\app\build\outputs\apk\debug\app-debug.apk
 ```
@@ -50,14 +51,21 @@ cd android
 или `adb install -r app-debug.apk`.
 
 **Частые ошибки и лечение:**
-- `Could not find installation of TypeScript` — старый `capacitor.config.ts` в твоей копии:
-  УДАЛИ его, оставь `capacitor.config.json` (или `npm i -D typescript`). Конфиг в JSON не требует TS.
+- `Could not find installation of TypeScript` — в репозитории больше НЕ бывает: `capacitor.config.ts`
+  удалён (патч 1.2.3), единственный конфиг — `capacitor.config.json`. Если ошибка есть в твоей
+  копии — удали старый `capacitor.config.ts` (или `npm i -D typescript`).
+- `Permission denied` на `./gradlew` (Linux/macOS/WSL) — `chmod +x android/gradlew`
+  (в репозитории бит 755 выставлен; git на Windows мог выкачать его без +x).
 - `Лексема "&&" не является допустимым разделителем` — PowerShell 5.1: используй `;` или команды выше;
   в npm-скриптах `&&` работает (npm запускает их через cmd.exe).
 - `SDK location not found` — создай `android/local.properties` со строкой
-  `sdk.dir=C:\Users\<имя>\AppData\Local\Android\Sdk` (путь покажет Android Studio → Settings → SDK).
+  `sdk.dir=C:\Users\<имя>\AppData\Local\Android\Sdk` (путь покажет Android Studio → Settings → SDK);
+  скрипт `tools/make-local-properties.ps1` делает это сам, `tools/gradle.mjs` — предупреждает заранее.
 - `JAVA_HOME is not set` — поставь Temurin 17 (выше) и перезапусти терминал, либо
   `$env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"` в текущей сессии.
+- Старый debug-APK не обновляется (`INSTALL_FAILED_VERSION_DOWNGRADE`) — удалённое приложение
+  или versionCode: при релизе инкрементируй `versionCode` в `android/app/build.gradle`
+  (сейчас versionCode 2 / versionName = CFG.VERSION = 1.2.3, см. чек-лист §6).
 
 ## 2. Нативный проект
 ```bash
@@ -68,6 +76,8 @@ npm run sync            # = npm run build && npx cap sync android
 SplashScreen/StatusBar, `webContentsDebuggingEnabled:false`.
 
 ### Правки android/ (проверить после `cap add`)
+(С патча 1.2.3 всё ниже УЖЕ внесено в репозиторийный манифест: `hardwareAccelerated`,
+`screenOrientation="portrait"` — HUD рассчитан на портрет; при `cap add` заново — повторить.)
 `android/app/src/main/AndroidManifest.xml`:
 ```xml
 <application

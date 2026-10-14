@@ -276,7 +276,10 @@ export function trainingMission() {
 
 export function recordMissionResult(mission, report) {
   const s = S();
-  if (mission.training || mission.isTrial) return;
+  // daily/trial/training must not touch campaign progression: they used to
+  // write `daily-…` keys into bestRank (inflating the «X/40» counter) and
+  // could unlock campaign missions the player never actually played
+  if (mission.training || mission.isTrial || mission.isDaily) return;
   const prev = s.progress.bestRank[mission.id];
   const order = { S: 5, A: 4, B: 3, C: 2, D: 1 };
   if (!prev || order[report.rank] > order[prev]) s.progress.bestRank[mission.id] = report.rank;

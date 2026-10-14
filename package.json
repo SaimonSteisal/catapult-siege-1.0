@@ -1,6 +1,6 @@
 {
   "name": "catapult-siege",
-  "version": "1.0.0",
+  "version": "1.2.3",
   "description": "Catapult Siege: Осадный расчёт — 3D touch-controlled siege artillery game for Android",
   "type": "module",
   "scripts": {
@@ -9,8 +9,8 @@
     "test": "node tools/headless-test.mjs",
     "balance": "node tools/balance-report.mjs",
     "sync": "npm run build && npx cap sync android",
-    "apk:debug": "cd android && gradlew.bat assembleDebug",
-    "apk:release": "cd android && gradlew.bat assembleRelease",
+    "apk:debug": "node tools/gradle.mjs assembleDebug",
+    "apk:release": "node tools/gradle.mjs assembleRelease",
     "build:dev": "node tools/build.mjs --dev",
     "serve": "node tools/serve.mjs",
     "e2e": "node tools/test-browser.mjs"

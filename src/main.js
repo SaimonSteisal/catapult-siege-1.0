@@ -8,7 +8,7 @@ import { Audio } from './core/audio.js';
 import { Input } from './core/input.js';
 import { Save, S, addResource, canAfford, pay, events as saveEvents, checkDaily, applyOfflineGains, costToCoins, lootToCoins } from './core/save.js';
 import { t } from './core/i18n.js';
-import { applyA11y, toast, el, qs, modal } from './ui/dom.js';
+import { applyA11y, toast, el, qs, clear, modal } from './ui/dom.js';
 import { UI } from './ui/screens.js';
 import { BattleHUD } from './ui/hud.js';
 import { WorldScene } from './world/scene.js';
@@ -24,7 +24,7 @@ import { Weather } from './systems/weather.js';
 import { Enemy } from './systems/enemy.js';
 import { Economy, tickCamp, campRate } from './systems/economy.js';
 import { computeMods, addXp, unlockedAmmo, ammoCost, grantTrophy, activeSynergies } from './systems/progression.js';
-import { SkillDirector, activeCrew, addFatigue, crewMods, roleDef } from './systems/crew.js';
+import { SkillDirector, activeCrew, addFatigue, addCrewXp, crewMods, roleDef } from './systems/crew.js';
 import { generateMission, campaignList, recordMissionResult, typeName, describeObjectives } from './systems/missions.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -186,7 +186,7 @@ class Game {
     Input.on('pan', (d) => this.rig.pan(d.dx, d.dy));
     Input.on('dbltap', () => {
       if (this.inBattle) this.rig.setMode('battle', { force: true, target: this.trebuchet.root.position.clone().add(new THREE.Vector3(0, 3, 12)), dist: 26, az: 180, pol: 62 });
-      else { this.rig.reset(); }
+      else this._frameMenuCamera();
       Audio.uiTap();
     });
     Input.on('tap', (d) => this._onViewportTap(d));
@@ -229,13 +229,22 @@ class Game {
   _bindVisibility() {
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) { Audio.suspend(); this.paused = true; if (this.inBattle) Save.save(true); }
-      else { Audio.resume(); this.paused = false; this.frame.last = nowMs(); }
+      else {
+        Audio.resume();
+        // do NOT auto-resume if the pause/settings screens are open over a battle
+        const screenOpen = this.ui.current === 'pause' || this.ui.current === 'settings';
+        if (!(this.inBattle && screenOpen)) { this.paused = false; this.timeFreeze = false; }
+        this.frame.last = nowMs();
+      }
     });
     window.addEventListener('pagehide', () => Save.save(true));
     window.addEventListener('beforeunload', () => Save.save(true));
     // keyboard fallback for desktop debugging
     window.addEventListener('keydown', (e) => {
       if (!this.inBattle) return;
+      // don't hijack keys while the user types in a field (save-import modal etc.)
+      const ae = document.activeElement;
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;
       const k = e.key.toLowerCase();
       if (k === 'escape' || k === 'p') this.onPause();
       if (k === ' ') { e.preventDefault(); this.onFireButton(); }
@@ -255,7 +264,11 @@ class Game {
     if (!cap) return;
     if (cap.Plugins && cap.Plugins.App) {
       cap.Plugins.App.addListener('backButton', () => {
-        if (this.inBattle) this.onPause();
+        if (this.inBattle) {
+          // back from settings/pause returns to the battle, never out of it
+          if (this.ui.current === 'pause') this.onResumeBattle();
+          else this.onPause();
+        }
         else if (this.ui.current && this.ui.current !== 'menu') this.ui.show('menu');
         else if (cap.Plugins.App.exitApp) cap.Plugins.App.exitApp();
       });
@@ -288,7 +301,10 @@ class Game {
     Audio.setVolume('ui', s.ui);
     Audio.setMuted(!!s.muted);
     applyA11y(s);
-    CFG.dev.showFps = s.showFps === undefined ? CFG.dev.showFps : s.showFps;
+    // dev/debug flags live in the save and must survive a reload
+    CFG.dev.showFps = !!s.showFps;
+    CFG.dev.godMode = !!s.godMode;
+    CFG.dev.instantCock = !!s.instantCock;
     CFG.render.qualityStart = s.quality;
     this.perf.auto = s.autoQuality;
     this.perf.index = s.quality;
@@ -300,15 +316,23 @@ class Game {
     if (this.rig) CFG.camera.dynamic = s.cameraDynamic;
     document.documentElement.style.setProperty('--ui-scale', String(s.uiScale || 1));
     if (this.hud) this.hud._syncZones();
+    // toggles that affect the live battle view must apply immediately
+    if (this.inBattle) { this._updatePrediction(); this._renderGhosts(); }
+    this.syncTesterUi();
   }
 
   onScreen(name) {
     this.menuOrbit = name === 'menu';
-    if (name !== 'none') Input.setEnabled(false);
-    if (name === 'menu' && this.trebuchet && !this.inBattle) {
-      this.rig.lookAtTrebuchet(new THREE.Vector3(0, 0, 0));
-      this.rig.distGoal = 21; this.rig.azGoal = 214; this.rig.polGoal = 70;
-    }
+    // the main menu is see-through: keep gestures alive so the camp scene can
+    // be orbited behind it (every other screen blocks input)
+    if (name === 'menu') Input.setEnabled(!this.inBattle);
+    else if (name !== 'none') Input.setEnabled(false);
+    if (name === 'menu' && this.trebuchet && !this.inBattle) this._frameMenuCamera();
+  }
+
+  _frameMenuCamera() {
+    this.rig.lookAtTrebuchet(new THREE.Vector3(0, 0, 0));
+    this.rig.distGoal = 21; this.rig.azGoal = 214; this.rig.polGoal = 70;
   }
 
   // ============================================================= MISSIONS ==
@@ -342,13 +366,16 @@ class Game {
     const cm = crewMods();
     this.mods = computeMods(cm, this.skills.buffMods());
     this.trebuchet && this.trebuchet.setModifiers(this.mods);
+    this.skills.reset();   // cooldowns/buffs must not leak between missions
 
     // ---- rebuild world for this mission
     this._buildMissionWorld(mission);
 
     // ---- economy
-    mission.supply = Math.round(mission.supply * (1 + (this.mods.supply || 0) * 0.12));
-    this.economy.beginMission(mission);
+    // NOTE: mission.supply must NOT be mutated here — restarting the mission
+    // used to compound the quartermaster bonus into the mission object forever.
+    const supplyEff = Math.round(mission.supply * (1 + (this.mods.supply || 0) * 0.12));
+    this.economy.beginMission(mission, supplyEff);
     // shells were paid for in the briefing loadout; here we only consume counts
     this.loadout = mission._loadout ? { ...mission._loadout.ammo } : { stone: 10 };
     if (mission.training) this.loadout.stone = Math.max(this.loadout.stone || 0, 24);
@@ -415,8 +442,8 @@ class Game {
 
   _buildMissionWorld(mission) {
     // tear down
-    if (this.terrainMesh) { this.scene.remove(this.terrainMesh); this.terrainMesh.geometry.dispose(); }
-    if (this.waterMesh) this.scene.remove(this.waterMesh);
+    if (this.terrainMesh) { this.scene.remove(this.terrainMesh); this.terrainMesh.geometry.dispose(); this.terrainMesh = null; }
+    if (this.waterMesh) { this.scene.remove(this.waterMesh); this.waterMesh.geometry.dispose(); this.waterMesh = null; }
     this.world.disposeDecor();
     this.structures.clear();
     this.debris.clear();
@@ -432,7 +459,7 @@ class Game {
     const hasWater = ['river', 'coast'].includes(mission.biome);
     if (hasWater) { this.waterMesh = this.terrain.waterMesh(this.materials); this.scene.add(this.waterMesh); }
 
-    this.world.buildBackdrop(rng);
+    this.world.buildBackdrop(rng, mission.biome);
     this.world.buildFlora(rng, this.terrain, this.world.quality.grass, mission.biome);
     this.world.buildCampProps(rng, this.terrain);
     this.world.setQuality(this.perf.index);
@@ -452,6 +479,9 @@ class Game {
 
     this.weather.setWinter(mission.biome === 'winter');
     this.weather.configure(mission.mod, rng);
+    // sky/lighting/fog follow the mission modifier or the biome's theme pool
+    // (_pickSkyTheme existed but was never called — every battle looked like sunset)
+    this.world.applySkyTheme(this._pickSkyTheme(mission, rng));
 
     // boss phases
     if (mission.isBoss) {
@@ -584,7 +614,23 @@ class Game {
       impact.cx = samples.center.x; impact.cz = samples.center.z;
       impact.cgroundY = this.terrain ? this.terrain.heightAt(samples.center.x, samples.center.z) : 0;
     }
-    this.vfx.showPrediction(pts, impact, samples.cep, samples.points);
+    // «Предсказание рикошета»: second arc from the first contact point
+    let bounce = null;
+    if (this.mods.flags.ricochetPredict && pts.hit && pts.hit.point && pts.hit.normal) {
+      const n = pts.hit.normal;
+      const vIn = dir.clone().multiplyScalar(speed * 0.82);   // approx velocity at contact
+      const vn = vIn.dot(n);
+      if (vn < 0) {
+        const e = ammo.restitution || 0.25;
+        const vOut = vIn.addScaledVector(n, -(1 + e) * vn).multiplyScalar(0.92);
+        if (vOut.length() > 3) {
+          const start = pts.hit.point.clone().addScaledVector(n, 0.3);
+          const pr = this.ballistics.predict(start, vOut.clone().normalize(), vOut.length(), this.selectedAmmo, { points: 60, dt: 0.06 });
+          if (pr && pr.length > 1) bounce = pr;
+        }
+      }
+    }
+    this.vfx.showPrediction(pts, impact, samples.cep, samples.points, bounce);
     this.hud.setCep(samples.cep);
     this._prediction = { pts, impact, cep: samples.cep, sigma };
     return this._prediction;
@@ -726,6 +772,7 @@ class Game {
 
       Audio.fire(clamp(data.power, 0.3, 1));
       Audio.whistle(speed, 0);
+      this.hud.subtitle('💥 ' + t('sub_shot'));
       this.vfx.dustPuff(tb.root.position.clone().add(new THREE.Vector3(0, 0.4, 0)), 8, 1.6, 0xb0a088);
       this.vfx.addShake(0.20 + data.power * 0.16);
       vibrate([16, 30, 22]);
@@ -755,6 +802,7 @@ class Game {
         setTimeout(() => {
           if (!this.inBattle) return;
           toast(t('hint_sling_broke'), 'bad');
+          this.hud.subtitle(t('hint_sling_broke'));
           Audio.nodeDamage();
           if (this.currentShot) { this.currentShot.vel.multiplyScalar(0.35); this.currentShot.vel.y -= 6; }
         }, 220);
@@ -824,8 +872,10 @@ class Game {
 
   _onImpact(res) {
     const eco = this.economy;
+    if (res.kind === 'distract') { toast(t('hint_distract'), 'good', 1800); return; }
     if (res.kind === 'hit' || res.kind === 'destroy') {
       const txt = Math.round(res.damage);
+      this.hud.subtitle('💥 ' + t('sub_hit'));
       this.vfx.floater(res.point, (res.crit ? '✷ ' : '') + txt, res.crit ? 'crit' : 'dmg');
       if (res.target && this.selectedTarget === res.target) {
         this.hud.flashTargetBar();
@@ -947,10 +997,11 @@ class Game {
   }
 
   _onEnemyEvent(name, data) {
-    if (name === 'incoming') { toast(t('hud_incoming'), 'bad', 1400); Audio.alarm(); vibrate([20, 40, 20]); }
+    if (name === 'incoming') { toast(t('hud_incoming'), 'bad', 1400); this.hud.subtitle('⚠️ ' + t('hud_incoming')); Audio.alarm(); vibrate([20, 40, 20]); }
     if (name === 'playerHit') {
       this._cepDirty = true;      // node damage changes spread -> refresh the area
       this.economy.nodeDamageTaken += data.dmg;
+      this.hud.subtitle('🛠️ ' + t('sub_node'));
       this.vfx.floater(this.trebuchet.root.position.clone().add(new THREE.Vector3(0, 4, 0)), `−${Math.round(data.dmg)}`, 'bad');
       toast(`${t('hint_node_broken', { n: t('node_' + data.node) })} — ${nodeConsequence(data.node)}`, 'bad', 2400);
       this.hud.renderNodes();
@@ -968,6 +1019,7 @@ class Game {
 
   _frameDestroyed() {
     toast(t('hint_frame_broke'), 'bad', 3200);
+    this.hud.subtitle(t('hint_frame_broke'));
     Audio.fail();
     this.vfx.addShake(0.5);
     this.vfx.explosion(this.trebuchet.root.position.clone().add(new THREE.Vector3(0, 2, 0)), 3.2, 'boom');
@@ -1219,6 +1271,7 @@ class Game {
     this.uiRoot.appendChild(banner);
     setTimeout(() => banner.remove(), 2600);
     Audio.success();
+    this.hud.subtitle('🎺 ' + t('sub_victory'));
     vibrate([30, 60, 30, 60, 60]);
   }
 
@@ -1255,6 +1308,9 @@ class Game {
     if (!this.inBattle) return;
     this.inBattle = false;
     this.pendingEnd = null;
+    this.selectedTarget = null;
+    this.currentShot = null;
+    this.shotInFlight = false;
     this.hud.show(false);
     this.vfx.hidePrediction();
     this.vfx.hideGhost();
@@ -1284,8 +1340,8 @@ class Game {
       this.economy.payout(report, this.mods);
       addXp(report.xp);
       recordMissionResult(this.mission, report);
-      // crew xp
-      for (const c of activeCrew()) addXp(0), (c.xp += Math.round(report.xp * 0.25));
+      // crew xp — through addCrewXp so levels actually tick up
+      for (const c of activeCrew()) addCrewXp(c.id, Math.round(report.xp * 0.25));
       Save.markDirty();
       Audio.rankS ? (report.rank === 'S' ? Audio.rankS() : Audio.success()) : Audio.success();
       if (this.mission.isDaily) { S().progress.daily.done = true; Save.markDirty(); }
@@ -1308,18 +1364,33 @@ class Game {
   restartMission() {
     const m = this.mission;
     this.inBattle = false;
+    this.paused = false;
+    this.timeFreeze = false;
+    this.pendingEnd = null;
+    this.enemy.enabled = false;
     this.hud.show(false);
+    this.vfx.hidePrediction();
+    this.vfx.hideGhost();
+    this.vfx.unmarkTarget();
     this.ui.show('briefing', { mission: m });
   }
 
   _buildMenuScene2() {
     // rebuild a light menu backdrop without wiping the save/UI
     if (this.terrainMesh) { this.scene.remove(this.terrainMesh); this.terrainMesh.geometry.dispose(); }
-    if (this.waterMesh) this.scene.remove(this.waterMesh);
+    if (this.waterMesh) { this.scene.remove(this.waterMesh); this.waterMesh = null; }
     this.world.disposeDecor();
     this.structures.clear();
     this.debris.clear();
     this.vfx.clearTransient();
+    this.vfx.hidePrediction();
+    this.vfx.hideGhost();
+    this.vfx.unmarkTarget();
+    // battle leftovers (shells in flight, enemy volley meshes, soldiers) must
+    // not survive into the menu scene
+    this.ballistics.clear();
+    this.enemy.clear();
+    this.physics.activeBodies.length = 0;
     const rng = makeRng(20240915);
     this.terrain = new Terrain(rng.int(1, 99999), 'meadow');
     this.terrainMesh = this.terrain.buildMesh(this.materials);
@@ -1344,10 +1415,21 @@ class Game {
   // ================================================================= PAUSE ==
   onPause() {
     if (!this.inBattle) return;
+    // Escape/back while the pause menu is open = resume (toggle)
+    if (this.ui.current === 'pause') { this.onResumeBattle(); return; }
     this.paused = true;
     this.timeFreeze = true;
     Input.setEnabled(false);
-    this.ui.show('pause', { onResume: () => { this.ui.hide(); this.paused = false; this.timeFreeze = false; this.hud.show(true); Input.setEnabled(true); } });
+    this.ui.show('pause', { onResume: () => this.onResumeBattle() });
+  }
+
+  onResumeBattle() {
+    if (!this.inBattle) { this.ui.show('menu'); return; }
+    this.ui.hide();
+    this.paused = false;
+    this.timeFreeze = false;
+    this.hud.show(true);      // also re-enables Input
+    Input.setEnabled(true);
   }
 
   // ============================================================= TUTORIAL ==
@@ -1407,7 +1489,7 @@ class Game {
 
     // camp idle production ticks once per real second while the app is open
     this._campAcc = (this._campAcc || 0) + dtReal;
-    if (this._campAcc >= 1) { tickCamp(this._campAcc); this._campAcc = 0; }
+    if (this._campAcc >= 1) { tickCamp(this._campAcc); checkDaily(); this._campAcc = 0; }
 
     // time scaling (freeze while aiming, slow-mo on impact)
     let scale = 1;
@@ -1418,6 +1500,8 @@ class Game {
     if (this.inBattle && !this.paused) {
       this.battleTime += dt;
       if (this.mission && this.mission.timeLimit) this.survivedSeconds += dt;
+      // the DEFEND 'survive' objective is checked against the economy object
+      this.economy.survivedSeconds = this.survivedSeconds;
     }
 
     // ---- systems
@@ -1515,8 +1599,10 @@ class Game {
     this.hud.setResources(entries);
     this.hud.setSupply(eco.supplyLeft, eco.budget);
 
-    // wind
-    this.hud.setWind(this.weather.hud());
+    // wind (+3 s forecast when the «Чтец ветра» synergy is active)
+    const windHud = this.weather.hud();
+    if (this.mods.flags.windForecast) windHud.forecast = this.physics.windAt(this.time + 3);
+    this.hud.setWind(windHud);
 
     // timer
     this.hud.setTimer(m.timeLimit ? Math.max(0, m.timeLimit - this.survivedSeconds) : null, m.timeLimit ? 'Продержаться' : null);

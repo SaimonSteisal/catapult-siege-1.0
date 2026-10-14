@@ -3,12 +3,38 @@
 <head>
 <meta charset="utf-8">
 <title>Catapult Siege → dist/</title>
-<meta http-equiv="refresh" content="0; url=dist/index.html">
-<script>location.replace('dist/index.html' + location.search);</script>
-<style>body{background:#161310;color:#e8dcc0;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}a{color:#d9a62e}</style>
+<style>
+  body{background:#161310;color:#e8dcc0;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}
+  .box{max-width:560px;padding:24px;line-height:1.6}
+  a,code{color:#d9a62e}
+  pre{background:#0d0b09;border:1px solid rgba(232,220,192,.18);border-radius:10px;padding:12px;text-align:left;overflow:auto;color:#c9bda0}
+</style>
 </head>
 <body>
-  <div>Запуск… если не открылось — <a href="dist/index.html">dist/index.html</a>.<br>
-  <small>VS Code: откройте папку проекта и запустите Live Server от этого файла (или <code>npm run serve</code>). Не открывайте <code>src/index.html</code> напрямую — это исходник для сборщика.</small></div>
+  <div class="box" id="msg">
+    Запуск… если не открылось — <a href="dist/index.html">dist/index.html</a>.<br>
+    <small>VS Code: откройте папку проекта и запустите Live Server от этого файла (или <code>npm run serve</code>). Не открывайте <code>src/index.html</code> напрямую — это исходник для сборщика.</small>
+  </div>
+<script>
+  // Редирект на собранный dist/index.html. На свежем клоне dist/ ещё нет —
+  // тогда вместо мёртвой страницы показываем инструкцию по сборке.
+  (function () {
+    var go = function () { location.replace('dist/index.html' + location.search); };
+    var help = function () {
+      document.getElementById('msg').innerHTML =
+        '<h2>Сборка не найдена</h2>' +
+        '<p>Каталог <code>dist/</code> пуст или отсутствует (он не хранится в git). Соберите игру:</p>' +
+        '<pre>npm install\nnpm run build     # → dist/index.html (полностью офлайн, один файл)</pre>' +
+        '<p>Затем обновите эту страницу, откройте <a href="dist/index.html">dist/index.html</a> ' +
+        'двойным кликом или запустите <code>npm run dev</code>.</p>' +
+        '<p>APK: <code>npm run sync</code>, затем <code>npm run apk:debug</code> ' +
+        '(или откройте папку <code>android/</code> в Android Studio → Run ▶).</p>';
+    };
+    if (location.protocol === 'file:') { go(); return; }   // двойной клик: пробуем сразу
+    fetch('dist/index.html', { method: 'HEAD' })
+      .then(function (r) { r.ok ? go() : help(); })
+      .catch(function () { help(); });
+  })();
+</script>
 </body>
 </html>

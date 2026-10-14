@@ -4,9 +4,9 @@
 // ============================================================================
 
 export const CFG = {
-  VERSION: '1.0.0',
+  VERSION: '1.2.3',
   SAVE_KEY: 'catapult_siege_save',
-  SAVE_VERSION: 3,
+  SAVE_VERSION: 4,
   LANG_DEFAULT: 'ru',
 
   // ---------------------------------------------------------------- RENDER ---

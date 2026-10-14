@@ -101,6 +101,14 @@ export class VFX {
     this.predLine.frustumCulled = false;
     this.predLine.visible = false;
     scene.add(this.predLine);
+    // ---- ricochet prediction (tech node «Предсказание рикошета»)
+    this.predLine2 = new THREE.Line(new THREE.BufferGeometry(), materials.pred.clone());
+    this.predLine2.material.transparent = true;
+    this.predLine2.material.opacity = 0.4;
+    this.predLine2.material.depthTest = true;
+    this.predLine2.frustumCulled = false;
+    this.predLine2.visible = false;
+    scene.add(this.predLine2);
     this.predDots = [];
     for (let i = 0; i < CFG.ballistics.predictPoints; i++) {
       const s = new THREE.Sprite(materials.dot.clone());
@@ -363,13 +371,21 @@ export class VFX {
   }
 
   // -------------------------------------------------------- trajectory viz ---
-  showPrediction(points, impact, cepRadius, samplePoints) {
+  showPrediction(points, impact, cepRadius, samplePoints, bouncePoints) {
     if (!points || points.length < 2) { this.hidePrediction(); return; }
     const pos = [];
     for (let i = 0; i < points.length; i++) pos.push(points[i].x, points[i].y, points[i].z);
     this.predLine.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     this.predLine.geometry.setDrawRange(0, points.length);
     this.predLine.visible = true;
+
+    // second arc: where the shell goes AFTER bouncing off the surface it hit
+    if (bouncePoints && bouncePoints.length > 1) {
+      const pos2 = [];
+      for (const p of bouncePoints) pos2.push(p.x, p.y, p.z);
+      this.predLine2.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos2, 3));
+      this.predLine2.visible = true;
+    } else this.predLine2.visible = false;
 
     // dots strided across the WHOLE arc so lob trajectories read end-to-end
     const vis = Math.min(this.predDots.length, CFG.ballistics.predictVisiblePoints);
@@ -431,6 +447,7 @@ export class VFX {
 
   hidePrediction() {
     this.predLine.visible = false;
+    this.predLine2.visible = false;
     this.marker.visible = false;
     this.cepDisk.visible = false;
     this.cepRing.visible = false;

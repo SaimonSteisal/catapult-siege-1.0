@@ -172,11 +172,20 @@ export class Ballistics {
 
   _detonate(body, point, normal) {
     const ammo = body.ammo;
-    const R = ammo.radius * (body.radiusBonus || 1);
+    const flags = (this.game.mods && this.game.mods.flags) || {};
+    let R = ammo.radius * (body.radiusBonus || 1);
+    // «Каменный дождь»: картечь бьёт по большей площади (r 4.2 → 5.6 м)
+    if (ammo.id === 'grapeshot' && flags.stoneRain) R = Math.max(R, 5.6);
     const center = point ? point.clone() : body.pos.clone();
     this.game.vfx.explosion(center, R, ammo.vfx);
     this.game.audio.explode(clamp(R / 3, 0.4, 1.6));
     if (ammo.vfx === 'fire') this.game.audio.fireWhoosh();
+
+    // «Улей» отвлекает расчёты вражеских орудий — контрбатарея замолкает
+    if (ammo.distract && this.game.enemy && this.game.enemy.enabled) {
+      this.game.enemy.nextFire += ammo.distract;
+      if (this.onImpact) this.onImpact({ kind: 'distract', point: center, ammoId: ammo.id });
+    }
 
     const dir = _v2.copy(body.vel).normalize();
     const list = this.game.structures.querySphere(center, R + 1.5);
@@ -189,7 +198,11 @@ export class Ballistics {
       const r = this.game.structures.damage(b, dmg, { source: 'blast', velocity: 12 * falloff, dir: _v3.copy(b.p).sub(center).normalize() });
       totalDamage += r.dmg || dmg;
       if (r.killed) killed++;
-      if (ammo.dot) this.game.structures.ignite(b, ammo.dot * (this.game.mods.pyromaniac ? 1.35 : 1), ammo.dotTime || 5);
+      if (ammo.dot) this.game.structures.ignite(b, ammo.dot * (flags.pyromaniac ? 1.35 : 1), ammo.dotTime || 5);
+    }
+    // blasts also mow down garrison soldiers in the radius (grapeshot's promise)
+    if (this.game.enemy && this.game.enemy.enabled) {
+      this.game.enemy.hurtArea(center, R + 1.5, ammo.dmg * (body.damageMul || 1) * 0.9);
     }
     // chain reaction (magazine)
     for (const t of this.game.structures.targets) {

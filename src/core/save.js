@@ -78,6 +78,11 @@ export function defaultState() {
       sensAz: 1.0,
       sensEl: 1.0,
       sensPower: 1.0,
+      // debug/QA flags — persisted so the settings screen doesn't lie after reload
+      showFps: false,
+      testerMode: false,
+      godMode: false,
+      instantCock: false,
     },
 
     stats: { playTime: 0, sessions: 0, coinsEarned: 0, blocksDestroyed: 0, perfectShots: 0, civiliansHit: 0 },
@@ -90,6 +95,16 @@ export function defaultState() {
 const MIGRATIONS = {
   1: (s) => { s.v = 2; s.camp = s.camp || defaultState().camp; s.progress.unlockedAmmo = s.progress.unlockedAmmo || ['stone']; },
   2: (s) => { s.v = 3; s.settings = { ...defaultState().settings, ...(s.settings || {}) }; s.rewarded = s.rewarded || { date: null, used: {} }; },
+  3: (s) => {
+    s.v = 4;
+    // daily/trial results used to leak into the campaign bestRank map
+    if (s.progress && s.progress.bestRank) {
+      for (const k of Object.keys(s.progress.bestRank)) {
+        if (/^(daily|trial|training)/.test(k)) delete s.progress.bestRank[k];
+      }
+    }
+    delete (s.settings || {}).langRoot;   // stray key from the old language widget
+  },
 };
 
 function migrate(s) {

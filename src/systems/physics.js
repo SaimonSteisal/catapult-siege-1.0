@@ -46,6 +46,15 @@ export class Physics {
     return this.wind;
   }
   windSpeed() { return this.wind.length(); }
+  /** forecast helper: wind magnitude at time t WITHOUT mutating state
+   *  (updateWind is a pure function of t, so this mirrors it) — used by the
+   *  «Чтец ветра» synergy to show the wind 3 s ahead */
+  windAt(t) {
+    const gust = this.windNoise(t * 0.055, 3.7, 3, 0.5);
+    const sway = Math.sin(t * 0.31) * 0.12;
+    const g = clamp(gust * 0.45 + sway, -0.55, 0.55);
+    return this.windBase.length() * (1 + g);
+  }
 
   // ---------------------------------------------------------------- stepping ---
   step(dt, bodies) {
