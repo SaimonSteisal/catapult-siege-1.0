@@ -78,6 +78,9 @@ export function defaultState() {
       sensAz: 1.0,
       sensEl: 1.0,
       sensPower: 1.0,
+      // graphics features (1.3.0)
+      shadows: true,
+      postFx: true,
       // debug/QA flags — persisted so the settings screen doesn't lie after reload
       showFps: false,
       testerMode: false,
@@ -85,7 +88,7 @@ export function defaultState() {
       instantCock: false,
     },
 
-    stats: { playTime: 0, sessions: 0, coinsEarned: 0, blocksDestroyed: 0, perfectShots: 0, civiliansHit: 0 },
+    stats: { playTime: 0, sessions: 0, coinsEarned: 0, blocksDestroyed: 0, perfectShots: 0, civiliansHit: 0, soldiersKilled: 0 },
     rewarded: { date: null, used: {} },
     debug: {},
   };
@@ -246,12 +249,20 @@ export function lootToCoins(loot) {
 export function checkDaily() {
   const s = S();
   const today = new Date().toISOString().slice(0, 10);
-  if (s.progress.daily.date !== today) {
-    s.progress.daily = { date: today, contractSeed: (Date.now() % 99991) + 1000, done: false, trials: 0 };
-    s.rewarded = { date: today, used: {} };
-    Save.markDirty();
-    events.emit('daily:reset');
-  }
+  if (s.progress.daily.date === today) return { newDay: false };
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  // login streak: continues when the previous visit was yesterday
+  const streak = s.progress.daily.date === yesterday ? (s.progress.daily.loginStreak || 1) + 1 : 1;
+  const prev = s.progress.daily;
+  s.progress.daily = { date: today, contractSeed: (Date.now() % 99991) + 1000, done: false, trials: 0, loginStreak: streak };
+  s.rewarded = { date: today, used: {} };
+  // streak reward: coins grow with the streak, every 7th day adds a blueprint
+  const reward = { coins: 100 + Math.min(6, streak - 1) * 25, blueprints: streak % 7 === 0 ? 1 : 0 };
+  addResource('coins', reward.coins);
+  if (reward.blueprints) addResource('blueprints', reward.blueprints);
+  Save.markDirty();
+  events.emit('daily:reset', { streak, reward });
+  return { newDay: true, streak, reward, firstEver: !prev || !prev.date };
 }
 
 // -------------------------------------------------------- offline camp gains ---

@@ -120,12 +120,15 @@ class Game {
 
     // save
     await Save.load();
-    checkDaily();
+    this._dailyToast(checkDaily());
     const offline = applyOfflineGains();
     this.applySettings();
 
     // build an idle "camp" scene behind the menu
     this._buildMenuScene();
+    // GPU sanity check for offscreen rendering — needs the menu scene in place
+    this.world.postSelfOk = this.world.selfTestPost();
+    this.world.setPostFx(S().settings.postFx !== false);
     this._bindImpacts();
 
     this.ui.show('menu');
@@ -161,6 +164,7 @@ class Game {
     this.weather = new Weather(this.scene, this.physics, this.world.lights);
     this.weather.configure({ id: 'calm', wind: 0.15 }, rng);
     this.world.applySkyTheme('sunset');
+    this.world.setShadowArea(14, 76);
     this.physics.attach(this.terrain, this.structures);
 
     // show off the machine in the menu
@@ -314,6 +318,16 @@ class Game {
       if (this.debris) this.debris.max = q.debrisMax;
     }
     if (this.rig) CFG.camera.dynamic = s.cameraDynamic;
+    if (this.world) {
+      this.world.setShadows(s.shadows !== false);
+      if (this.world.postSelfOk === undefined) this.world.postSelfOk = this.world.selfTestPost();
+      const wantPost = s.postFx !== false;
+      this.world.setPostFx(wantPost);
+      if (wantPost && !this.world.postEnabled && !this._postWarned) {
+        this._postWarned = true;
+        setTimeout(() => toast(t('post_unsupported'), '', 3200), 1200);
+      }
+    }
     document.documentElement.style.setProperty('--ui-scale', String(s.uiScale || 1));
     if (this.hud) this.hud._syncZones();
     // toggles that affect the live battle view must apply immediately
@@ -335,6 +349,14 @@ class Game {
     this.rig.distGoal = 21; this.rig.azGoal = 214; this.rig.polGoal = 70;
   }
 
+  /** login-streak reward announcement (boot + midnight rollover) */
+  _dailyToast(info) {
+    if (!info || !info.newDay || info.firstEver) return;
+    const bp = info.reward.blueprints ? ' +1 📜' : '';
+    toast(t('daily_reward', { n: info.streak, coins: info.reward.coins, bp }), 'good', 4200);
+    Audio.coins(5);
+  }
+
   // ============================================================= MISSIONS ==
   nextCampaignMission() {
     const list = campaignList();
@@ -351,6 +373,8 @@ class Game {
     this.paused = false;
     this.battleTime = 0;
     this.survivedSeconds = 0;
+    this.streak = 0;
+    this.streakBest = 0;
     this.shotsThisMission = [];
     this.ghostTraces = [];
     this.lastShotTrace = null;
@@ -407,8 +431,10 @@ class Game {
     this.rig.targetGoal.set(-1, 2.4, mission.dist * 0.26);
 
     // ---- enemy
-    this.enemy.setup(this.structures.targets, mission.garrison, this.trebuchet.root.position);
+    this.enemy.setup(this.structures.targets, mission.garrisonSpec || { archer: mission.garrison, spear: 0, engineer: 0, crew: 0, commander: 1 },
+      (this.missionFort && this.missionFort.slots) || [], this.trebuchet.root.position, mission.biome);
     this.enemy.enabled = !mission.training;
+    this.rattle = 0; this.rattleT = 0; this._crushToasted = false;
 
     // ---- HUD
     this.hud.show(true);
@@ -416,6 +442,7 @@ class Game {
     this.hud.buildAmmo();
     this.hud.buildSkills();
     this.hud.togglePrecision(!!S().settings.precisionAim);
+    this.hud.setStreak(0);
     this.hudAimChanged({ az: 0, el: 45, power: 0.7 });
     this._updateHud(0);
 
@@ -463,9 +490,13 @@ class Game {
     this.world.buildFlora(rng, this.terrain, this.world.quality.grass, mission.biome);
     this.world.buildCampProps(rng, this.terrain);
     this.world.setQuality(this.perf.index);
+    // shadow frustum covers the firing corridor: machine (z≈0) → fort (z≈dist).
+    // Tight = more shadow-map texels per metre; trees outside never cast anyway.
+    this.world.setShadowArea(mission.dist * 0.5, 34 + mission.dist * 0.55);
 
     this.physics.attach(this.terrain, this.structures);
     this.structures.terrain = this.terrain;
+    this.structures.onBlockDrop = (b) => this.enemy && this.enemy.crushCheck(b);
     this.trebuchet.terrain = this.terrain;
     this.trebuchet.place(0, 0, Math.PI / 2);   // local -X → world +Z (the fort)
 
@@ -645,6 +676,7 @@ class Game {
     if (this.skills.has('precise')) s *= 0.25;
     if (this.mods.flags.windComp) s *= 0.85;
     if (S().settings.aimAssist) s *= 0.8;   // on-screen assist steadies the aim
+    s *= 1 + this.rattleNow();             // «расчёт прижат» стрелами с стен
     return clamp(s * (1 + extra), 0.12, 16);
   }
 
@@ -873,7 +905,13 @@ class Game {
   _onImpact(res) {
     const eco = this.economy;
     if (res.kind === 'distract') { toast(t('hint_distract'), 'good', 1800); return; }
+    // impact shock knocks down defenders near the contact point
+    if (res.point && this.enemy && this.enemy.enabled && (res.kind === 'miss' || res.kind === 'hit' || res.kind === 'destroy')) {
+      const ammo = CFG.ammo[res.ammoId] || CFG.ammo.stone;
+      this.enemy.hurtArea(res.point, 1.7, ammo.dmg * 0.45);
+    }
     if (res.kind === 'hit' || res.kind === 'destroy') {
+      this._bumpStreak();
       const txt = Math.round(res.damage);
       this.hud.subtitle('💥 ' + t('sub_hit'));
       this.vfx.floater(res.point, (res.crit ? '✷ ' : '') + txt, res.crit ? 'crit' : 'dmg');
@@ -888,11 +926,14 @@ class Game {
       this._checkTargetEvents();
       if (this.tutorial.step === 2) this._tutNext();
     } else if (res.kind === 'blast' || res.kind === 'chain') {
+      this._bumpStreak();
       eco.recordHit(true, false);
       this._perfectCheck(res.point);
       this._checkTargetEvents();
       this.vfx.floater(res.point, '💥 ' + Math.round(res.damage || 0), 'crit');
     } else if (res.kind === 'miss') {
+      this.streak = 0;
+      this.hud.setStreak(0);
       eco.recordHit(false, false);
       Audio.miss();
       this.lastMiss = res.point ? res.point.clone() : null;
@@ -916,12 +957,25 @@ class Game {
     this._maybeEndMission();
   }
 
+  /** consecutive-impact streak: small escalating coin bounty on destroyed targets */
+  _bumpStreak() {
+    this.streak = (this.streak || 0) + 1;
+    if (this.streak > (this.streakBest || 0)) this.streakBest = this.streak;
+    this.hud.setStreak(this.streak);
+    if (this.streak === 3 || this.streak === 5 || (this.streak >= 8 && this.streak % 4 === 0)) {
+      toast(t('streak_hit', { n: this.streak }), 'good', 1600);
+      Audio.crit();
+    }
+  }
+  streakMul() { return this.streak >= 2 ? 1 + Math.min(0.4, 0.08 * (this.streak - 1)) : 1; }
+
   _perfectCheck(point) {
     if (!this.selectedTarget) return;
     const d = point.distanceTo(this.selectedTarget.center);
     if (d < CFG.missions.perfectShotBonus.radius) {
       this.economy.recordHit(true, true);
       this.vfx.floater(point.clone().add(new THREE.Vector3(0, 2, 0)), t('hint_perfect'), 'good');
+      this.world.setFlash(0xffe6a8, 0.35);
       Audio.crit();
       vibrate([12, 40, 12]);
     }
@@ -973,10 +1027,20 @@ class Game {
           Audio.success();
           grantTrophy(tg.type);
           this.economy.targetsDestroyed++;
+          this.world.setFlash(0xd9a62e, 0.4);
           vibrate([14, 30, 14]);
+          // streak bounty: consecutive-impact series pays extra coins per kill
+          if (this.streak >= 2) {
+            const bonus = Math.max(1, Math.round((tg.bounty > 0 ? tg.bounty : 30) * (this.streakMul() - 1)));
+            this.economy.addBounty(bonus);
+            this.vfx.floater(tg.center.clone().add(new THREE.Vector3(0, 2.6, 0)), `🔥×${this.streak} +${bonus} 🪙`, 'good');
+          }
           if (tg.type === 'engine') this.enemy.setAlert(clamp(this.enemy.alertLevel + 0.2, 0, 1));
           if (tg.type === 'commander' || tg.type === 'banner') this.enemy.setAlert(1);
         }
+        if (tg.type === 'commander') this.enemy.killCommanderUnit();
+        if (tg.type === 'banner') this.enemy.onBannerDown();
+        if (tg.type === 'engine') this.enemy.onEngineDown(tg);
         if (this.selectedTarget === tg) { this.selectedTarget = null; this.vfx.unmarkTarget(); this._autoAimSuggest(); }
         if (this.bossPhase) this._bossPhaseCheck();
       }
@@ -996,12 +1060,51 @@ class Game {
     }
   }
 
+  rattleNow() { return this.rattleT > 0 ? this.rattle : 0; }
+
   _onEnemyEvent(name, data) {
-    if (name === 'incoming') { toast(t('hud_incoming'), 'bad', 1400); this.hud.subtitle('⚠️ ' + t('hud_incoming')); Audio.alarm(); vibrate([20, 40, 20]); }
+    if (name === 'unitKilled') {
+      const bounty = data.bounty || 3;
+      this.economy.addBounty(bounty);
+      const st = S().stats; st.soldiersKilled = (st.soldiersKilled || 0) + 1;
+      Save.markDirty();
+      this.vfx.floater(data.pos.clone().add(new THREE.Vector3(0, 1.5, 0)), `+${bounty} 🪙`, 'good');
+      this.vfx.dustPuff(data.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), 4, 0.5, 0x8a4a3a);
+      Audio.unitDie();
+      if (data.tag === 'crush' && !this._crushToasted) { this._crushToasted = true; toast(t('hint_crushed'), '', 2600); }
+      return;
+    }
+    if (name === 'rout') {
+      toast(t('hint_rout'), 'good', 3000);
+      this.hud.subtitle('📯 ' + t('hint_rout'));
+      Audio.routHorn();
+      return;
+    }
+    if (name === 'volleyImpact') {
+      const A = CFG.enemy.archer;
+      this.rattle = Math.min(A.debuffCap, (this.rattleT > 0 ? this.rattle : 0) + A.spreadDebuff);
+      this.rattleT = A.debuffSec;
+      this.vfx.floater(this.trebuchet.root.position.clone().add(new THREE.Vector3(0, 4.4, 0)), t('sub_volley'), 'bad');
+      this.vfx.dustPuff(data.pos.clone().add(new THREE.Vector3(0, 0.6, 0)), 3, 0.4, 0xb0a088);
+      this.vfx.addShake(0.05);
+      Audio.arrowThud();
+      this._cepDirty = true;
+      return;
+    }
+    if (name === 'engineDown') {
+      this.hud.subtitle('💥 ' + t('sub_engine_down'));
+      return;
+    }
+    if (name === 'commanderDown') {
+      this.hud.subtitle('📯 ' + t('sub_commander_down'));
+      return;
+    }
+    if (name === 'incoming') { toast(t('hud_incoming'), 'bad', 1400); this.hud.subtitle('⚠️ ' + t('hud_incoming')); this.world.setFlash(0x8a3a2c, 0.3); Audio.alarm(); vibrate([20, 40, 20]); }
     if (name === 'playerHit') {
       this._cepDirty = true;      // node damage changes spread -> refresh the area
       this.economy.nodeDamageTaken += data.dmg;
       this.hud.subtitle('🛠️ ' + t('sub_node'));
+      this.world.setFlash(0xb3372c, 0.85);
       this.vfx.floater(this.trebuchet.root.position.clone().add(new THREE.Vector3(0, 4, 0)), `−${Math.round(data.dmg)}`, 'bad');
       toast(`${t('hint_node_broken', { n: t('node_' + data.node) })} — ${nodeConsequence(data.node)}`, 'bad', 2400);
       this.hud.renderNodes();
@@ -1014,12 +1117,18 @@ class Game {
         Audio.repair();
       }
     }
-    if (name === 'wave') { toast('Волна!', 'bad', 1400); this.enemy.setAlert(1); }
+    if (name === 'wave') {
+      toast(t('hint_wave', { n: data.burst || 2 }), 'bad', 2200);
+      this.hud.subtitle('⚠️ ' + t('hud_incoming'));
+      this.world.setFlash(0x8a6ab3, 0.45);
+      this.enemy.setAlert(1);
+    }
   }
 
   _frameDestroyed() {
     toast(t('hint_frame_broke'), 'bad', 3200);
     this.hud.subtitle(t('hint_frame_broke'));
+    this.world.setFlash(0xb3372c, 1.0);
     Audio.fail();
     this.vfx.addShake(0.5);
     this.vfx.explosion(this.trebuchet.root.position.clone().add(new THREE.Vector3(0, 2, 0)), 3.2, 'boom');
@@ -1272,6 +1381,7 @@ class Game {
     setTimeout(() => banner.remove(), 2600);
     Audio.success();
     this.hud.subtitle('🎺 ' + t('sub_victory'));
+    this.world.setFlash(0xd9a62e, 0.6);
     vibrate([30, 60, 30, 60, 60]);
   }
 
@@ -1332,12 +1442,27 @@ class Game {
     }
     const report = this.economy.finish(this.structures, this.mods);
     report.refund = refund;
+    report.bestStreak = this.streakBest || 0;
+    report.garrisonKilled = this.enemy.killed || 0;
+    report.garrisonTotal = this.enemy.totalSoldiers || 0;
     if (retreated) { report.rank = 'D'; report.objectiveDone = false; }
     report.xp = won ? report.xp : Math.round(report.xp * 0.4);
+    // accuracy-streak mastery bonus (win only)
+    if (won && (this.streakBest || 0) >= 3) report.xp += Math.min(90, 15 * (this.streakBest - 2));
 
     if (refund > 0) setTimeout(() => toast(`Возврат неиспользованных ядер: ${refund} шт.`, '', 2600), 900);
     if (won) {
       this.economy.payout(report, this.mods);
+      // contract reward promised in the briefing (was never paid before 1.4.1 —
+      // the whole blueprint economy starved because of this)
+      const mult = CFG.missions.rankRewardMul[report.rank] || 1;
+      const rp = this.mission.rewardPreview || {};
+      const granted = [];
+      for (const k of ['coins', 'stone', 'wood', 'metal', 'rope', 'pitch', 'blueprints']) {
+        const v = Math.round((rp[k] || 0) * mult);
+        if (v > 0) { addResource(k, v); granted.push(`${CFG.resources.icon[k]}${v}`); }
+      }
+      if (granted.length) setTimeout(() => toast(`${t('res_contract')}: ${granted.join(' ')}`, 'good', 3200), 700);
       addXp(report.xp);
       recordMissionResult(this.mission, report);
       // crew xp — through addCrewXp so levels actually tick up
@@ -1399,6 +1524,7 @@ class Game {
     this.world.buildFlora(rng, this.terrain, this.world.quality.grass, 'meadow');
     this.world.buildCampProps(rng, this.terrain);
     this.world.applySkyTheme('sunset');
+    this.world.setShadowArea(14, 76);
     this.physics.attach(this.terrain, this.structures);
     this.trebuchet.terrain = this.terrain;
     this.trebuchet.place(0, 0, Math.PI / 2);
@@ -1489,7 +1615,7 @@ class Game {
 
     // camp idle production ticks once per real second while the app is open
     this._campAcc = (this._campAcc || 0) + dtReal;
-    if (this._campAcc >= 1) { tickCamp(this._campAcc); checkDaily(); this._campAcc = 0; }
+    if (this._campAcc >= 1) { tickCamp(this._campAcc); this._dailyToast(checkDaily()); this._campAcc = 0; }
 
     // time scaling (freeze while aiming, slow-mo on impact)
     let scale = 1;
@@ -1499,6 +1625,7 @@ class Game {
 
     if (this.inBattle && !this.paused) {
       this.battleTime += dt;
+      if (this.rattleT > 0) this.rattleT -= dt;
       if (this.mission && this.mission.timeLimit) this.survivedSeconds += dt;
       // the DEFEND 'survive' objective is checked against the economy object
       this.economy.survivedSeconds = this.survivedSeconds;
@@ -1512,7 +1639,7 @@ class Game {
       this.debris.update(this.physics, dt);
       this.ballistics.update(dt);
       this.skills.update(dtReal);
-      this.enemy.update(dt, { trebuchet: this.trebuchet, structures: this.structures, missionKind: this.mission ? this.mission.kind : null });
+      this.enemy.update(dt, { trebuchet: this.trebuchet, structures: this.structures, missionKind: this.mission ? this.mission.kind : null, missionChapter: this.mission ? this.mission.chapter : 1 });
       this._updateHud(dtReal);
     } else {
       this.debris.update(this.physics, Math.min(dt, dtReal * 0.5));
@@ -1583,7 +1710,8 @@ class Game {
 
     // objective line with LIVE per-objective progress
     const prog = this.structures.targetProgress();
-    const objText = `${t('kind_' + m.kind)} · ${prog.hostileDone}/${prog.hostile}`;
+    const gar = this.enemy.totalSoldiers ? ` · 🗡 ${this.enemy.killed}/${this.enemy.totalSoldiers}` : '';
+    const objText = `${t('kind_' + m.kind)} · ${prog.hostileDone}/${prog.hostile}${gar}`;
     const sub = this._objectiveLines(m).join('<br>');
     this.hud.setObjective(objText, sub);
 

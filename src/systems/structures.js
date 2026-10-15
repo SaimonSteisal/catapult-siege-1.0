@@ -39,6 +39,8 @@ export class Structures {
     for (const key of Object.keys(MAT)) {
       const im = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), materials.block[key], this.capacity);
       im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      im.castShadow = true;
+      im.receiveShadow = true;
       im.count = 0;
       // NOTE: frustum culling on an InstancedMesh uses a bounding sphere that is
       // computed once (possibly while empty) — the fort would vanish when the
@@ -230,6 +232,7 @@ export class Structures {
   }
 
   destroy(b, ctx = {}) {
+    if (this.onBlockDrop) this.onBlockDrop(b);
     if (!b.alive) return;
     b.alive = false;
     this.destroyedCount++;

@@ -4,7 +4,7 @@
 // ============================================================================
 
 export const CFG = {
-  VERSION: '1.2.3',
+  VERSION: '1.4.1',
   SAVE_KEY: 'catapult_siege_save',
   SAVE_VERSION: 4,
   LANG_DEFAULT: 'ru',
@@ -13,9 +13,9 @@ export const CFG = {
   render: {
     maxPixelRatio: 2.0,
     qualitySteps: [
-      { name: 'high', pixelRatio: 1.0, shadows: true,  grass: 900, debrisMax: 140, particles: 1.0, fog: true,  outline: true  },
-      { name: 'med',  pixelRatio: 0.85, shadows: false, grass: 420, debrisMax: 90,  particles: 0.7, fog: true,  outline: true  },
-      { name: 'low',  pixelRatio: 0.7,  shadows: false, grass: 0,   debrisMax: 45,  particles: 0.4, fog: false, outline: false },
+      { name: 'high', pixelRatio: 1.0, shadows: true,  shadowMap: 2048, grass: 900, debrisMax: 140, particles: 1.0, fog: true,  outline: true,  bloom: 1.0, fxaa: true  },
+      { name: 'med',  pixelRatio: 0.85, shadows: true, shadowMap: 1024, grass: 420, debrisMax: 90,  particles: 0.7, fog: true,  outline: true,  bloom: 0.6, fxaa: true  },
+      { name: 'low',  pixelRatio: 0.7,  shadows: false, shadowMap: 0,   grass: 0,   debrisMax: 45,  particles: 0.4, fog: false, outline: false, bloom: 0.0, fxaa: false },
     ],
     qualityStart: 1,                    // index into qualitySteps
     downgradeFrameMs: 20,               // avg frame above this => step down
@@ -25,6 +25,18 @@ export const CFG = {
     fovBase: 55,
     fovFlight: 62,
     fpsReportEvery: 60,
+    toneExposure: 1.0,                  // ACES exposure (renderer.toneMappingExposure)
+  },
+
+  // ------------------------------------------------------- POST-PROCESSING ---
+  post: {
+    bloomStrength: 0.55,     // scaled per quality step (render.qualitySteps[i].bloom)
+    bloomRadius: 0.55,
+    bloomThreshold: 0.82,    // only fire/explosions/sun disc glow
+    vignette: 0.34,          // edge darkening 0..1
+    saturation: 1.07,
+    contrast: 1.05,
+    flashDecay: 6.0,         // hit/damage screen-flash decay speed (1/s)
   },
 
   // --------------------------------------------------------------- PHYSICS ---
@@ -277,6 +289,8 @@ export const CFG = {
     xpPerChapter: 34,
     perfectShotBonus: { radius: 1.6, xp: 45, coins: 30 },
     rankSGates: { accuracy: 0.7, noCivilians: true, noFrameLoss: true },
+    garrisonShares: { archer: 0.45, spear: 0.35, engineer: 0.20 },
+    defendArcherBonus: 0.10,
     distMin: 46,
     distMax: 96,
     windMax: [3, 6, 9, 12, 14],
@@ -315,6 +329,28 @@ export const CFG = {
     soldierHp: 34,
     defendWaveInterval: 22,
     panicDuration: 4,
+    // ---- 1.4.0: garrison roles (PLAN_UNITS_AND_FORTS.md §2/§7)
+    roles: {
+      archer:    { hp: 26, bounty: 3,  speed: 1.5 },
+      spear:     { hp: 40, bounty: 4,  speed: 1.8 },
+      engineer:  { hp: 30, bounty: 5,  speed: 2.0 },
+      crew:      { hp: 30, bounty: 3,  speed: 2.0 },
+      commander: { hp: 90, bounty: 25, speed: 1.2 },
+    },
+    unitRadius: 1.2,           // proxy-collision catch radius (a shell ploughing the walkway kills)
+    pierceMax: { anchor: 3, granite: 1, stone: 1, truestone: 1 },
+    crushRadius: 0.8,          // crushing by a collapsing block
+    corpseSinkSec: 2.5,
+    corpseCap: 12,
+    archer: {
+      readySec: 1.2, drawSec: 0.8, cooldown: [5.5, 9.0],
+      spreadDebuff: 0.08, debuffSec: 6, debuffCap: 0.25,
+    },
+    morale: {
+      killWeight: 0.7, commanderLoss: 0.3, bannerLoss: 0.15,
+      routAt: 0.35, routShare: 0.6,
+      commanderAuraFloor: 0.5, engineerAuraMul: 1.25,
+    },
   },
 
   // ---------------------------------------------------------------- CAMP/IDLE ---
@@ -377,13 +413,13 @@ export const CFG = {
       dawn:    { top: 0x6f86b8, mid: 0xd9a8a0, bot: 0xf2c9a0, sun: 0xffd9b0, sunInt: 0.95, sunEl: 8,  stars: 0,    clouds: 0.25, aurora: 0,   haze: 0.35, fog: 0xd8b8a8, fogNear: 60, fogFar: 300 },
       noon:    { top: 0x3f7ec4, mid: 0x9cc4e0, bot: 0xd8e4e8, sun: 0xfff4d0, sunInt: 1.35, sunEl: 62, stars: 0,    clouds: 0.18, aurora: 0,   haze: 0.10, fog: 0xc4d4dc, fogNear: 90, fogFar: 340 },
       sunset:  { top: 0x5b8fc4, mid: 0xa9c6dd, bot: 0xe8c9a0, sun: 0xffd9a0, sunInt: 1.18, sunEl: 14, stars: 0,    clouds: 0.22, aurora: 0,   haze: 0.30, fog: 0xc9d6e2, fogNear: 90, fogFar: 340 },
-      dusk:    { top: 0x2b3a63, mid: 0x7a5a7a, bot: 0xd98a5a, sun: 0xff9a5a, sunInt: 0.7,  sunEl: 3,  stars: 0.35, clouds: 0.30, aurora: 0,   haze: 0.45, fog: 0x6a5a72, fogNear: 50, fogFar: 260 },
-      night:   { top: 0x0b1226, mid: 0x1d2a44, bot: 0x3a4a63, sun: 0xbfd0e8, sunInt: 0.32, sunEl: 38, stars: 1,    clouds: 0.12, aurora: 0,   haze: 0.15, fog: 0x22303f, fogNear: 40, fogFar: 220 },
-      aurora:  { top: 0x081222, mid: 0x14303a, bot: 0x2a4a52, sun: 0xcfe0f0, sunInt: 0.3,  sunEl: 30, stars: 1,    clouds: 0.08, aurora: 1,   haze: 0.10, fog: 0x1a2a32, fogNear: 40, fogFar: 220 },
+      dusk:    { top: 0x33427a, mid: 0x8a6a8a, bot: 0xe09a6a, sun: 0xffa468, sunInt: 0.85,  sunEl: 3,  stars: 0.35, clouds: 0.30, aurora: 0,   haze: 0.45, fog: 0x7a6a82, fogNear: 50, fogFar: 260 },
+      night:   { top: 0x101a33, mid: 0x2a3a58, bot: 0x4a5c78, sun: 0xcfdcef, sunInt: 0.62, sunEl: 38, stars: 1,    clouds: 0.12, aurora: 0,   haze: 0.15, fog: 0x2c3c50, fogNear: 40, fogFar: 220 },
+      aurora:  { top: 0x0c1a2e, mid: 0x1c4048, bot: 0x38606a, sun: 0xd8e8f4, sunInt: 0.58,  sunEl: 30, stars: 1,    clouds: 0.08, aurora: 1,   haze: 0.10, fog: 0x24383f, fogNear: 40, fogFar: 220 },
       storm:   { top: 0x4a5560, mid: 0x6a747e, bot: 0x8a9298, sun: 0xb0b8c0, sunInt: 0.5,  sunEl: 40, stars: 0,    clouds: 0.85, aurora: 0,   haze: 0.60, fog: 0x7a848c, fogNear: 30, fogFar: 180 },
       mist:    { top: 0x9aa8b0, mid: 0xb4bcc2, bot: 0xcfd4d6, sun: 0xd8d2c4, sunInt: 0.5,  sunEl: 30, stars: 0,    clouds: 0.5,  aurora: 0,   haze: 0.8,  fog: 0xb9bfc4, fogNear: 14, fogFar: 105 },
       heat:    { top: 0x7ab0d4, mid: 0xd4c8a0, bot: 0xf0e0b0, sun: 0xfff0c0, sunInt: 1.5,  sunEl: 70, stars: 0,    clouds: 0.06, aurora: 0,   haze: 0.55, fog: 0xe0d4b4, fogNear: 70, fogFar: 300 },
-      ash:     { top: 0x2a2020, mid: 0x4a3430, bot: 0x6a4a3a, sun: 0xff7a4a, sunInt: 0.6,  sunEl: 20, stars: 0.15, clouds: 0.6,  aurora: 0,   haze: 0.7,  fog: 0x4a3a34, fogNear: 35, fogFar: 200 },
+      ash:     { top: 0x332826, mid: 0x584038, bot: 0x7a5844, sun: 0xff8a55, sunInt: 0.72,  sunEl: 20, stars: 0.15, clouds: 0.6,  aurora: 0,   haze: 0.7,  fog: 0x58463c, fogNear: 35, fogFar: 200 },
     },
     biomes: {
       meadow:  { terrain: { amp: 3.2, rough: 1.8, flat: 32, water: false }, tint: 0x7a8a4f, rock: 0x8b8378, trees: 'pine',   nTrees: 0.07, skies: ['noon', 'sunset', 'dawn'],  backdrop: 'mountains' },

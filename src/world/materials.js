@@ -282,6 +282,11 @@ export function createMaterials(scene) {
         }
 
         gl_FragColor = vec4(col, 1.0);
+        // standard three.js epilogue: applies renderer tone-mapping + sRGB when
+        // drawing to screen, and stays a no-op when drawing into the
+        // post-processing render targets (OutputPass does it there instead)
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
       }`,
   });
 

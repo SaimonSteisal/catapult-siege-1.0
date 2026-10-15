@@ -139,6 +139,9 @@ canvas{display:block;position:absolute;inset:0;width:100%;height:100%;touch-acti
 #aimpad .knob b{font-size:.8em;letter-spacing:.04em}
 #aimread{position:absolute;top:6px;left:6px;display:flex;flex-direction:column;align-items:flex-start;font-size:calc(var(--fs-small) * .95);font-weight:700;gap:3px}
 #aimread span{background:rgba(0,0,0,.5);border:1px solid var(--stroke);padding:2px 7px;border-radius:14px;white-space:nowrap}
+#aimread .streak{color:#ffd27a;border-color:rgba(217,166,46,.65);background:rgba(60,30,10,.55);font-weight:900}
+#aimread .streak.pop{animation:streakPop .32s ease}
+@keyframes streakPop{0%{transform:scale(1)}45%{transform:scale(1.28)}100%{transform:scale(1)}}
 .axis{position:absolute;font-size:10px;opacity:.5;pointer-events:none;letter-spacing:.04em}
 .axis-h{right:8px;bottom:8px}
 .axis-v{right:8px;top:44%}

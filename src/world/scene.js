@@ -1,10 +1,82 @@
 // ============================================================================
-//  world/scene.js — renderer, sky, lights, environment decoration
+//  world/scene.js — renderer, sky, lights, environment decoration,
+//  post-processing (bloom/vignette/grade/flash) and real shadows
 // ============================================================================
 import * as THREE from 'three';
 import { CFG } from '../config.js';
 import { clamp, makeRng, lerp, DEG } from '../core/utils.js';
 import { createMaterials } from './materials.js';
+
+const FS_VERT = `
+  varying vec2 vUv;
+  void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+
+/** extracts HDR highlights (sun disc, fire, blasts) for the bloom chain */
+const BRIGHT_FRAG = `
+  uniform sampler2D tScene;
+  uniform float threshold;
+  varying vec2 vUv;
+  void main(){
+    vec3 c = texture2D(tScene, vUv).rgb;
+    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    float k = max(l - threshold, 0.0) / max(l, 1e-4);
+    gl_FragColor = vec4(c * k, 1.0);
+  }`;
+
+/** separable 9-tap gauss; uDir = texel step (horizontal or vertical) */
+const BLUR_FRAG = `
+  uniform sampler2D tSrc;
+  uniform vec2 uDir;
+  varying vec2 vUv;
+  void main(){
+    vec3 s = texture2D(tSrc, vUv).rgb * 0.227027;
+    s += (texture2D(tSrc, vUv + uDir * 1.3846).rgb + texture2D(tSrc, vUv - uDir * 1.3846).rgb) * 0.3162162;
+    s += (texture2D(tSrc, vUv + uDir * 3.2308).rgb + texture2D(tSrc, vUv - uDir * 3.2308).rgb) * 0.0702702;
+    gl_FragColor = vec4(s, 1.0);
+  }`;
+
+/**
+ * final composite: HDR scene + bloom → Khronos PBR-neutral tonemap →
+ * vignette / saturation / contrast → gameplay flash → sRGB encode.
+ * One fullscreen draw, no composer buffer-swap mechanics involved.
+ */
+const COMPOSITE_FRAG = `
+  uniform sampler2D tScene;
+  uniform sampler2D tBloom;
+  uniform float exposure, bloomStrength, vignette, saturation, contrast, flashAmount;
+  uniform vec3 flashColor;
+  varying vec2 vUv;
+  vec3 neutralTonemap(vec3 c){
+    const float startCompression = 0.8 - 0.04;
+    const float desaturation = 0.15;
+    float x = min(c.r, min(c.g, c.b));
+    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+    c -= offset;
+    float peak = max(c.r, max(c.g, c.b));
+    if (peak < startCompression) return c;
+    float d = 1.0 - startCompression;
+    float newPeak = 1.0 - d * d / (peak + d - startCompression);
+    c *= newPeak / peak;
+    float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+    return mix(c, vec3(newPeak), g);
+  }
+  vec3 lin2srgb(vec3 c){
+    c = max(c, 0.0);
+    return mix(1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, 12.92 * c, step(c, vec3(0.0031308)));
+  }
+  void main(){
+    vec3 col = texture2D(tScene, vUv).rgb * exposure;
+    col += texture2D(tBloom, vUv).rgb * bloomStrength;
+    col = neutralTonemap(col);
+    vec2 q = vUv - 0.5;
+    col *= clamp(1.0 - dot(q, q) * vignette * 1.7, 0.0, 1.0);
+    float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    col = mix(vec3(l), col, saturation);
+    col = (col - 0.5) * contrast + 0.5;
+    float edge = smoothstep(0.18, 0.72, length(q) * 1.45);
+    col = mix(col, flashColor, clamp(flashAmount, 0.0, 1.0) * edge * 0.6);
+    gl_FragColor = vec4(lin2srgb(col), 1.0);
+  }`;
 
 export class WorldScene {
   constructor(canvas) {
@@ -22,8 +94,14 @@ export class WorldScene {
     this.renderer.setPixelRatio(this._pixelRatio());
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace || THREE.LinearSRGBColorSpace;
+    // Tone mapping is NOT done by the renderer: three compiles a different
+    // program permutation for render-target vs canvas draws, and some GL
+    // implementations (software rasterizers) mis-shade the no-tonemap variant.
+    // We apply the Khronos PBR-neutral curve ourselves in the grade pass, so
+    // both paths compile identical shaders and look identical.
+    this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.shadowMap.enabled = false;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.setClearColor(0x8fb4d9, 1);
 
     this.scene = new THREE.Scene();
@@ -39,10 +117,73 @@ export class WorldScene {
     this.decor.name = 'decor';
     this.scene.add(this.decor);
 
+    // ---- post-processing chain (gated by settings.postFx + quality step)
+    this.shadowsWanted = true;
+    this.postFxWanted = true;
+    this.flashAmount = 0;
+    this.shadowFocus = new THREE.Vector3(0, 0, 20);
+    this._sunDir = new THREE.Vector3(-0.6, 0.5, 0.3).normalize();
+    this._buildPost();
+
     this.qualityIndex = CFG.render.qualityStart;
     this.onResize = this.onResize.bind(this);
     window.addEventListener('resize', this.onResize);
     window.addEventListener('orientationchange', () => setTimeout(this.onResize, 200));
+  }
+
+  _buildPost() {
+    const P = CFG.post;
+    const mkRT = (w, h, half) => new THREE.WebGLRenderTarget(w, h, {
+      type: half ? THREE.HalfFloatType : THREE.UnsignedByteType,
+      depthBuffer: true, stencilBuffer: false,
+    });
+    const pr = this.renderer.getPixelRatio();
+    const w = Math.max(2, Math.floor(window.innerWidth * pr));
+    const h = Math.max(2, Math.floor(window.innerHeight * pr));
+    // persistent targets — created once, reused every frame
+    this.postRT = mkRT(w, h, true);
+    this.postRT.samples = 4;                       // MSAA resolve on WebGL2
+    this.bloomA = mkRT(w >> 2, h >> 2, true);
+    this.bloomB = mkRT(w >> 2, h >> 2, true);
+
+    this._fsScene = new THREE.Scene();
+    this._fsCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    this._fsGeo = new THREE.PlaneGeometry(2, 2);
+    this.brightMat = new THREE.ShaderMaterial({
+      vertexShader: FS_VERT, fragmentShader: BRIGHT_FRAG, depthTest: false, depthWrite: false,
+      uniforms: { tScene: { value: null }, threshold: { value: P.bloomThreshold } },
+    });
+    this.blurMat = new THREE.ShaderMaterial({
+      vertexShader: FS_VERT, fragmentShader: BLUR_FRAG, depthTest: false, depthWrite: false,
+      uniforms: { tSrc: { value: null }, uDir: { value: new THREE.Vector2() } },
+    });
+    this.compositeMat = new THREE.ShaderMaterial({
+      vertexShader: FS_VERT, fragmentShader: COMPOSITE_FRAG, depthTest: false, depthWrite: false,
+      uniforms: {
+        tScene: { value: null }, tBloom: { value: null },
+        exposure: { value: CFG.render.toneExposure },
+        bloomStrength: { value: P.bloomStrength },
+        vignette: { value: P.vignette },
+        saturation: { value: P.saturation },
+        contrast: { value: P.contrast },
+        flashColor: { value: new THREE.Color(0xb3372c) },
+        flashAmount: { value: 0 },
+      },
+    });
+    this._fsQuad = new THREE.Mesh(this._fsGeo, this.compositeMat);
+    this._fsQuad.frustumCulled = false;
+    this._fsScene.add(this._fsQuad);
+    // 1×1 black fallback so tBloom is never an unbound sampler
+    this._blackTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+    this._blackTex.needsUpdate = true;
+    this.postEnabled = true;
+    this.bloomOn = true;
+  }
+
+  _blit(mat, target) {
+    this._fsQuad.material = mat;
+    this.renderer.setRenderTarget(target);
+    this.renderer.render(this._fsScene, this._fsCam);
   }
 
   _pixelRatio() {
@@ -57,11 +198,15 @@ export class WorldScene {
     sun.position.set(-52, 44, 22);
     sun.castShadow = false;
     sun.shadow.mapSize.set(1024, 1024);
-    sun.shadow.camera.left = -60; sun.shadow.camera.right = 60;
-    sun.shadow.camera.top = 60; sun.shadow.camera.bottom = -60;
-    sun.shadow.camera.near = 1; sun.shadow.camera.far = 200;
-    sun.shadow.bias = -0.0016;
+    sun.shadow.camera.left = -90; sun.shadow.camera.right = 90;
+    sun.shadow.camera.top = 90; sun.shadow.camera.bottom = -90;
+    sun.shadow.camera.near = 1; sun.shadow.camera.far = 420;
+    sun.shadow.bias = -0.0004;
+    sun.shadow.normalBias = 0.05;   // small: thin trebuchet parts self-shadow otherwise
+    if ('radius' in sun.shadow) sun.shadow.radius = 2.2;        // softer PCF edges
+    if ('intensity' in sun.shadow) sun.shadow.intensity = 0.88; // keep shadowed side readable
     this.scene.add(sun);
+    this.scene.add(sun.target);   // target must be in the graph to matter
     // fill from the player's side so fort facings toward the camera stay readable
     const fill = new THREE.DirectionalLight(0xbccfe0, 0.5);
     fill.position.set(18, 26, -70);
@@ -76,6 +221,103 @@ export class WorldScene {
       torches.push(l);
     }
     return { hemi, sun, fill, torches };
+  }
+
+  /** point the shadow frustum at the battle corridor (trebuchet → fort) */
+  setShadowArea(centerZ = 20, half = 95) {
+    this.shadowFocus.set(0, 0, centerZ);
+    const s = this.lights.sun.shadow;
+    s.camera.left = -half; s.camera.right = half;
+    s.camera.top = half; s.camera.bottom = -half;
+    s.camera.near = 1; s.camera.far = 420;
+    s.camera.updateProjectionMatrix();
+    this._placeSun();
+  }
+  _placeSun() {
+    const sun = this.lights.sun;
+    sun.target.position.copy(this.shadowFocus);
+    sun.target.updateMatrixWorld();
+    sun.position.copy(this.shadowFocus).addScaledVector(this._sunDir, 160);
+  }
+
+  /** user setting + quality step decide whether shadows render at all */
+  setShadows(on) {
+    this.shadowsWanted = !!on;
+    this._applyShadowState();
+  }
+  _applyShadowState() {
+    const q = this.quality;
+    const enable = !!(this.shadowsWanted && q.shadows && (q.shadowMap || 0) > 0);
+    const size = q.shadowMap || 1024;
+    if (enable && this.lights.sun.shadow.mapSize.x !== size) {
+      this.lights.sun.shadow.mapSize.set(size, size);
+      if (this.lights.sun.shadow.map) { this.lights.sun.shadow.map.dispose(); this.lights.sun.shadow.map = null; }
+    }
+    if (this.renderer.shadowMap.enabled !== enable || this.lights.sun.castShadow !== enable) {
+      this.renderer.shadowMap.enabled = enable;
+      this.lights.sun.castShadow = enable;
+      // toggling shadows at runtime requires shader recompiles
+      this.scene.traverse((o) => {
+        if (!o.material) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) m.needsUpdate = true;
+      });
+    }
+  }
+
+  setPostFx(on) {
+    this.postFxWanted = !!on;
+    this.postEnabled = this.postFxWanted && !!this.postRT && this.postSelfOk !== false;
+  }
+
+  /**
+   * One-shot GPU sanity check: some software rasterizers mis-shade lit
+   * materials when the scene is rendered offscreen (the machine reads ~black
+   * in the HDR target while unlit geometry stays bright). We render the menu
+   * once into a tiny byte target and compare a lit region (the trebuchet)
+   * against the meadow: an anomalous ratio disables post-processing for this
+   * device (shadows and the rest of the game keep working).
+   */
+  selfTestPost() {
+    try {
+      const r = this.renderer;
+      // software rasterizers (SwiftShader/llvmpipe/Windows Basic) mis-shade lit
+      // materials in offscreen targets in the wild — post stays a real-GPU feature
+      const gl = r.getContext();
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      const gpu = String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+      if (/swiftshader|llvmpipe|softpipe|software|basic render|microsoft basic/i.test(gpu)) {
+        this.postSelfOk = false;
+        this.postSelfReason = 'software-gl:' + gpu.slice(0, 40);
+        return false;
+      }
+      const rt = new THREE.WebGLRenderTarget(96, 96, { type: THREE.UnsignedByteType });
+      r.setRenderTarget(rt);
+      r.render(this.scene, this.camera);
+      const buf = new Uint8Array(96 * 96 * 4);
+      r.readRenderTargetPixels(rt, 0, 0, 96, 96, buf);
+      r.setRenderTarget(null);
+      rt.dispose();
+      const lum = (x, y) => { const i = ((95 - y) * 96 + x) * 4; return (buf[i] + buf[i + 1] + buf[i + 2]) / 765; };
+      let machine = 0, grass = 0;
+      for (let dy = 0; dy < 6; dy++) for (let dx = 0; dx < 6; dx++) {
+        machine += lum(45 + dx, 31 + dy);
+        grass += lum(45 + dx, 52 + dy);
+      }
+      machine /= 36; grass /= 36;
+      this.postSelfOk = !(grass > 0.1 && machine < 0.35 * grass);
+      return this.postSelfOk;
+    } catch (e) {
+      this.postSelfOk = false;
+      return false;
+    }
+  }
+
+  /** gameplay screen flash: damage=red, perfect/destroyed=gold, wave=purple */
+  setFlash(hex, amount = 0.6) {
+    if (!this.compositeMat) return;
+    this.compositeMat.uniforms.flashColor.value.setHex(hex);
+    this.flashAmount = Math.max(this.flashAmount, amount);
   }
 
   _sky() {
@@ -128,6 +370,7 @@ export class WorldScene {
   /** instanced grass tufts + rocks + trees, palettes & species from the biome table */
   buildFlora(rng, terrain, count, biome) {
     clearGroup(this.flora);
+    this._treeCastCandidates = [];
     const g = new THREE.Group();
     this.flora = g;
     this.decor.add(g);
@@ -193,7 +436,9 @@ export class WorldScene {
       const tree = makeTreeSpecies(rng, bd.trees, bd.snow);
       tree.position.set(x, y, z);
       g.add(tree);
+      this._treeCastCandidates.push(tree);
     }
+    this._applyTreeShadows();
     return g;
   }
 
@@ -213,8 +458,11 @@ export class WorldScene {
       const tent = new THREE.Group();
       const cone = new THREE.Mesh(new THREE.ConeGeometry(1.9, 2.5, 5), clothMat);
       cone.position.y = 1.25;
+      cone.castShadow = true; cone.receiveShadow = true;
       tent.add(cone);
-      tent.add(new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.9, 0.16), woodMat).translateY(1.4));
+      const pole = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.9, 0.16), woodMat).translateY(1.4);
+      pole.castShadow = true;
+      tent.add(pole);
       tent.position.set(x, y, z);
       tent.rotation.y = rng.range(0, 6.28);
       g.add(tent);
@@ -226,6 +474,7 @@ export class WorldScene {
       const c = new THREE.Mesh(new THREE.BoxGeometry(rng.range(0.7, 1.1), rng.range(0.6, 0.9), rng.range(0.7, 1.1)), woodMat);
       c.position.set(x, y + 0.4, z);
       c.rotation.y = rng.range(0, 3);
+      c.castShadow = true; c.receiveShadow = true;
       g.add(c);
     }
     // campfire
@@ -252,7 +501,7 @@ export class WorldScene {
     this.lights.torches.forEach((lt, i) => {
       const a = (i / 4) * Math.PI * 2;
       lt.position.set(Math.cos(a) * 16, 4, 74 + Math.sin(a) * 12);
-      lt.intensity = 2.2;
+      lt.intensity = 3.2;
     });
     return g;
   }
@@ -278,12 +527,22 @@ export class WorldScene {
     const dir = new THREE.Vector3(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az)).normalize();
     u.sunDir.value.copy(dir);
     u.sunSize.value = id === 'heat' ? 1.5 : 1.0;
-    this.lights.sun.position.copy(dir).multiplyScalar(120);
+    this._sunDir.copy(dir);
+    this._placeSun();
     this.lights.sun.color.setHex(th.sun);
     this.lights.sun.intensity = th.sunInt;
     this.lights.hemi.color.setHex(th.mid);
-    this.lights.hemi.intensity = 0.32 + th.sunInt * 0.42;
+    this.lights.hemi.intensity = 0.34 + th.sunInt * 0.45;
     this.lights.fill.intensity = th.sunInt * 0.35;
+    // dark themes used to read as "screen off": add a cool moonlight floor
+    const dark = th.stars > 0.5 || id === 'ash';
+    if (dark) {
+      this.lights.hemi.intensity += 0.22;
+      this.lights.fill.intensity = Math.max(this.lights.fill.intensity, 0.30);
+      this.lights.fill.color.setHex(0x9fb6d8);
+    } else {
+      this.lights.fill.color.setHex(0xbccfe0);
+    }
 
     // fog
     if (this.quality.fog) {
@@ -294,8 +553,7 @@ export class WorldScene {
     this.renderer.setClearColor(th.bot, 1);
 
     // torches only on dark themes
-    const dark = th.stars > 0.5 || id === 'ash';
-    this.lights.torches.forEach((t2) => { t2.visible = dark; });
+    this.lights.torches.forEach((t2) => { t2.visible = dark; t2.intensity = dark ? 3.2 : 0; });
   }
 
   /** theme-driven backdrop rebuild (colors follow the sky) */
@@ -320,15 +578,38 @@ export class WorldScene {
     }
     if (this.campFireLight) this.campFireLight.intensity = 1.35 + Math.sin(t * 13) * 0.3;
     if (this.sky) { this.sky.position.copy(this.camera.position); }
+    // gameplay flash decay (post-processing uniform)
+    if (this.flashAmount > 0.001) {
+      this.flashAmount *= Math.exp(-CFG.post.flashDecay * Math.max(dt, 0));
+      if (this.flashAmount < 0.001) this.flashAmount = 0;
+      if (this.compositeMat) this.compositeMat.uniforms.flashAmount.value = this.flashAmount;
+    }
+  }
+
+  /** trees join the shadow pass only on the top quality step (they are
+   *  hundreds of small meshes — too many extra draws for mid/low) */
+  _applyTreeShadows() {
+    const cast = this.qualityIndex === 0;
+    for (const tree of (this._treeCastCandidates || [])) {
+      tree.traverse((o) => { if (o.isMesh) o.castShadow = cast; });
+    }
   }
 
   setQuality(index) {
     this.qualityIndex = clamp(index, 0, CFG.render.qualitySteps.length - 1);
     const q = CFG.render.qualitySteps[this.qualityIndex];
     this.renderer.setPixelRatio(this._pixelRatio() * q.pixelRatio);
-    this.renderer.shadowMap.enabled = q.shadows;
-    this.lights.sun.castShadow = q.shadows;
+    this._applyShadowState();
+    // post chain follows the quality step (bloom is the expensive part)
+    if (this.compositeMat) {
+      this.bloomOn = (q.bloom || 0) > 0;
+      this.compositeMat.uniforms.bloomStrength.value = CFG.post.bloomStrength * (q.bloom || 1);
+      // MSAA only on the top quality step
+      const want = this.qualityIndex === 0 ? 4 : 0;
+      if (this.postRT && this.postRT.samples !== want) { this.postRT.samples = want; this.postRT.dispose(); }
+    }
     if (this.flora) this.flora.visible = q.grass > 0;
+    this._applyTreeShadows();
     if (this.backdropGroup) this.backdropGroup.children.forEach((c, i) => { c.visible = this.qualityIndex < 2 || i === 0; });
     this.onResize();
     return q;
@@ -340,9 +621,39 @@ export class WorldScene {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h, false);
+    if (this.postRT) {
+      const pr = this.renderer.getPixelRatio();
+      this.postRT.setSize(Math.max(2, Math.floor(w * pr)), Math.max(2, Math.floor(h * pr)));
+      this.bloomA.setSize(Math.max(2, Math.floor(w * pr) >> 2), Math.max(2, Math.floor(h * pr) >> 2));
+      this.bloomB.setSize(Math.max(2, Math.floor(w * pr) >> 2), Math.max(2, Math.floor(h * pr) >> 2));
+    }
   }
 
-  render() { this.renderer.render(this.scene, this.camera); }
+  render() {
+    if (!this.postEnabled) { this.renderer.render(this.scene, this.camera); return; }
+    const r = this.renderer;
+    // 1) scene → HDR target (MSAA-resolved)
+    r.setRenderTarget(this.postRT);
+    r.render(this.scene, this.camera);
+    // 2) bloom chain at quarter resolution
+    if (this.bloomOn) {
+      this.brightMat.uniforms.tScene.value = this.postRT.texture;
+      this._blit(this.brightMat, this.bloomA);
+      const tx = 1 / this.bloomA.width, ty = 1 / this.bloomA.height;
+      this.blurMat.uniforms.tSrc.value = this.bloomA.texture;
+      this.blurMat.uniforms.uDir.value.set(tx, 0);
+      this._blit(this.blurMat, this.bloomB);
+      this.blurMat.uniforms.tSrc.value = this.bloomB.texture;
+      this.blurMat.uniforms.uDir.value.set(0, ty);
+      this._blit(this.blurMat, this.bloomA);
+      this.compositeMat.uniforms.tBloom.value = this.bloomA.texture;
+    } else {
+      this.compositeMat.uniforms.tBloom.value = this._blackTex;
+    }
+    // 3) composite → screen (tonemap + grade + flash + sRGB)
+    this.compositeMat.uniforms.tScene.value = this.postRT.texture;
+    this._blit(this.compositeMat, null);
+  }
 
   disposeDecor() {
     clearGroup(this.decor);

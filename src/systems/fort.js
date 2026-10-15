@@ -15,6 +15,15 @@ export class FortBuilder {
     this.T = terrain;
     this.rng = rng;
     this.dist = 80;
+    this.slots = [];   // garrison placement points (PLAN_UNITS_AND_FORTS §3.1)
+  }
+
+  /** garrison spawn point: role preference + zone + cover factor */
+  addSlot(x, y, z, role, zone, cover = 0.3) {
+    if (this.slots.length > 64) return null;
+    const s = { pos: new THREE.Vector3(x, y, z), role, zone, cover, taken: false };
+    this.slots.push(s);
+    return s;
   }
 
   ground(x, z) { return this.T ? this.T.heightAt(x, z) : 0; }
@@ -110,9 +119,15 @@ export class FortBuilder {
       else this.chapel(ct, cx, this.ground(cx, cz), cz, rng);
     }
 
+    // inner yard: engineer/spear posts ring the main structure (behind walls)
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + 0.4;
+      const px = Math.cos(a) * 9, pz = z + Math.sin(a) * 6 - 5;
+      this.addSlot(px, this.ground(px, pz), pz, i % 2 ? 'spear' : 'engineer', 'yard', 0.2);
+    }
     this.S.finalizeTargets();
     this.S.buildSupports();
-    return { targets, z, scheme };
+    return { targets, z, scheme, slots: this.slots };
   }
 
   // ------------------------------------------------------------ constructions ---
@@ -132,6 +147,9 @@ export class FortBuilder {
       // crenellations
       if (walkway && c % 2 === 0) {
         this.blk(x, y + U * 0.35, z, U * 0.9, U * 0.7, thickness * 0.8, mat, wt, { hpMul: this.hpMul * 0.5 });
+      } else if (walkway) {
+        // gap between merlons = an archer's firing place on the wall walk
+        this.addSlot(x, y, z - thickness * 0.3, 'archer', 'wall', 0.6);
       }
     }
     return wt;
@@ -165,6 +183,10 @@ export class FortBuilder {
       const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
       this.blk(x + Math.cos(a) * U * 0.5, y + U * 0.45, z + Math.sin(a) * U * 0.5, U * 1.5, U * 0.7, U * 1.5, 'wood', t, { hpMul: this.hpMul * 0.6, ry: a });
     }
+    // gallery floor: archer places in the tower corners
+    const gyTop = gy + U * baseH;
+    this.addSlot(x - U * 0.9, gyTop, z - U * 0.9, 'archer', 'tower', 0.7);
+    this.addSlot(x + U * 0.9, gyTop, z - U * 0.9, 'archer', 'tower', 0.7);
     return t;
   }
 
@@ -184,6 +206,9 @@ export class FortBuilder {
         this.blk(x + s * U, gy + U * r + U / 2, z, U * 0.95, U, U * 0.42, isHinge ? 'metal' : 'wood', t, { hpMul: this.hpMul * (isHinge ? 0.7 : 1) });
       }
     }
+    // gate guard: spearmen on both flanks, facing the approach
+    this.addSlot(x - U * 2.7, gy, z - U * 1.4, 'spear', 'gate', 0.4);
+    this.addSlot(x + U * 2.7, gy, z - U * 1.4, 'spear', 'gate', 0.4);
     return t;
   }
 
@@ -202,15 +227,18 @@ export class FortBuilder {
   }
 
   engine(T, x, y, z, rng) {
-    // small enemy trebuchet: frame + arm + counterweight
+    // small enemy trebuchet, axis along Z: throws toward the player (−Z),
+    // counterweight at the rear (+Z) — the machine FACES its firing direction
     for (const s of [-1, 1]) {
       this.blk(x + s * U * 1.1, y + U * 0.5, z, U * 0.4, U, U * 2.2, 'wood', T, { hpMul: this.hpMul * 0.9 });
       this.blk(x + s * U * 1.1, y + U * 1.4, z, U * 0.4, U * 0.8, U * 0.4, 'wood', T, { hpMul: this.hpMul * 0.7 });
     }
-    this.blk(x, y + U * 1.1, z, U * 2.6, U * 0.35, U * 0.35, 'wood', T, { hpMul: this.hpMul * 0.8, rz: 0.35 });
-    this.blk(x + U * 1.3, y + U * 0.75, z, U * 0.9, U * 0.9, U * 0.9, 'metal', T, { hpMul: this.hpMul * 1.1 });
-    this.blk(x, y + U * 0.25, z, U * 3.0, U * 0.5, U * 2.6, 'wood', T, { hpMul: this.hpMul });
-    T.enginePos = new THREE.Vector3(x, y + U * 1.6, z);
+    this.blk(x, y + U * 1.1, z, U * 0.35, U * 0.35, U * 2.6, 'wood', T, { hpMul: this.hpMul * 0.8, rx: 0.35 });
+    this.blk(x, y + U * 0.75, z + U * 1.3, U * 0.9, U * 0.9, U * 0.9, 'metal', T, { hpMul: this.hpMul * 1.1 });
+    this.blk(x, y + U * 0.25, z, U * 2.6, U * 0.5, U * 3.0, 'wood', T, { hpMul: this.hpMul });
+    T.enginePos = new THREE.Vector3(x, y + U * 1.6, z - U * 1.6);   // muzzle at the FRONT
+    this.addSlot(x - 1.7, y, z - 1.5, 'crew', 'enginepad', 0.3);
+    this.addSlot(x + 1.7, y, z - 1.5, 'crew', 'enginepad', 0.3);
     return T;
   }
 
@@ -224,6 +252,8 @@ export class FortBuilder {
     }
     this.blk(x, y + U * 2.3, z, U * 3.3, U * 0.5, U * 3.3, 'wood', T, { hpMul: this.hpMul * 0.6 });
     T.soldiers = CFG.enemy.soldiersPerBarracks;
+    this.addSlot(x - U, y, z - U * 2.2, 'spear', 'yard', 0.2);
+    this.addSlot(x + U, y, z - U * 2.2, 'spear', 'yard', 0.2);
     return T;
   }
 
@@ -260,6 +290,7 @@ export class FortBuilder {
     this.blk(x, y + U * 1.35, z, U * 0.42, U * 0.5, U * 0.42, 'metal', T, { hpMul: this.hpMul * 0.8 });
     this.blk(x + U * 0.5, y + U * 0.9, z, U * 0.14, U * 1.9, U * 0.14, 'wood', T, { hpMul: this.hpMul * 0.5 });
     T.commanderPos = new THREE.Vector3(x, y + 1.2, z);
+    this.addSlot(x, y, z - U * 0.8, 'commander', 'keep', 0.2);
     return T;
   }
 

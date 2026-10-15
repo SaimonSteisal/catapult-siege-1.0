@@ -236,6 +236,10 @@ class AudioEngine {
   crit() { this._tone({ freq: 1200, dur: 0.12, gain: 0.12, type: 'square', endFreq: 1800 }); setTimeout(() => this._tone({ freq: 2000, dur: 0.14, gain: 0.08, type: 'sine' }), 60); }
   miss() { this._tone({ freq: 300, dur: 0.3, gain: 0.07, type: 'triangle', endFreq: 140 }); }
 
+  volleyTwang() { this._tone({ freq: 520, dur: 0.14, gain: 0.06, type: 'triangle', endFreq: 240 }); this._noise({ dur: 0.05, freq: 2600, gain: 0.04, type: 'bandpass' }); }
+  arrowThud() { this._noise({ dur: 0.09, freq: 500, gain: 0.12, type: 'lowpass' }); this._tone({ freq: 140, dur: 0.1, gain: 0.07, type: 'sine', endFreq: 90 }); }
+  unitDie() { this._noise({ dur: 0.12, freq: 300, gain: 0.08, type: 'lowpass' }); this._tone({ freq: 96, dur: 0.16, gain: 0.06, type: 'triangle', endFreq: 60 }); }
+  routHorn() { [196, 165, 131].forEach((f, i) => setTimeout(() => this._tone({ freq: f, dur: 0.5, gain: 0.09, type: 'sawtooth', endFreq: f * 0.9 }), i * 160)); }
   enemyShot(dist = 60) {
     const g = clamp(1 - dist / 130, 0.12, 0.7);
     this._tone({ freq: 110, dur: 0.4, gain: 0.20 * g, type: 'sine', endFreq: 42 });

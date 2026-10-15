@@ -56,6 +56,8 @@ export class Ballistics {
     p.age = 0;
     p.trailPts = [];
     p.impactHandled = false;
+    p._prev = p._prev || new THREE.Vector3();
+    p._prev.copy(pos);
     p.onHit = (body, target, impact, normal, point) => this._onHit(body, target, impact, normal, point);
     p.onWater = (body, pos) => this._onWater(body, pos);
 
@@ -184,6 +186,7 @@ export class Ballistics {
     // «Улей» отвлекает расчёты вражеских орудий — контрбатарея замолкает
     if (ammo.distract && this.game.enemy && this.game.enemy.enabled) {
       this.game.enemy.nextFire += ammo.distract;
+      this.game.enemy.distractUnits(ammo.distract);
       if (this.onImpact) this.onImpact({ kind: 'distract', point: center, ammoId: ammo.id });
     }
 
@@ -251,6 +254,19 @@ export class Ballistics {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
       p.age += dt;
+      // garrison proxy hits: the shell sweeps through soldier bodies on its way
+      if (p.alive && p._prev && this.game.enemy && this.game.enemy.enabled) {
+        const maxHits = CFG.enemy.pierceMax[p.ammoId] || 1;
+        const hits = this.game.enemy.sweepSegment(p._prev, p.pos, p.radius, maxHits);
+        if (hits.length) {
+          const dir = _v3.copy(p.vel).normalize();
+          for (const u of hits) {
+            const killed = this.game.enemy.hurt(u, p.ammo.dmg * 0.9 * (p.damageMul || 1), dir, p.ammo.vfx === 'fire' ? 'fire' : 'shot');
+            if (killed) p.vel.multiplyScalar(0.985);
+          }
+        }
+      }
+      if (p._prev) p._prev.copy(p.pos);
       if (p.mesh.visible) {
         p.mesh.position.copy(p.pos);
         p.mesh.rotation.copy(p.rot);

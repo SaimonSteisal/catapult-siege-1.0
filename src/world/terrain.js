@@ -131,7 +131,7 @@ export class Terrain {
 
     const mat = materialLib.terrainVertex;
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.receiveShadow = false;
+    mesh.receiveShadow = true;   // fort/machine shadows fall on the ground
     mesh.name = 'terrain';
     return mesh;
   }

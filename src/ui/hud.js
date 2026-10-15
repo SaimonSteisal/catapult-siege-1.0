@@ -80,7 +80,7 @@ export class BattleHUD {
     // aim pad
     this.aimPad = el('div', { id: 'aimpad' });
     this.aimPad.innerHTML = `
-      <div id="aimread"><span class="az">${t('hud_az')} 0.0°</span><span class="el">${t('hud_el')} 45°</span><span class="pw">${t('hud_pwr')} 70%</span><span class="cep">±0.0 м</span></div>
+      <div id="aimread"><span class="az">${t('hud_az')} 0.0°</span><span class="el">${t('hud_el')} 45°</span><span class="pw">${t('hud_pwr')} 70%</span><span class="cep">±0.0 м</span><span class="streak" style="display:none"></span></div>
       <div class="axis axis-h">⇄ ${t('hud_az')}</div>
       <div class="axis axis-v">⇅ ${t('hud_el')}</div>
       <div class="axis axis-p">⤢ ${t('hud_pwr')}</div>
@@ -92,6 +92,7 @@ export class BattleHUD {
     this.readEl = this.aimPad.querySelector('.el');
     this.readPw = this.aimPad.querySelector('.pw');
     this.readCep = this.aimPad.querySelector('.cep');
+    this.streakEl = this.aimPad.querySelector('.streak');
     this.hintEl = this.aimPad.querySelector('.hint');
     this.cancelEl = this.aimPad.querySelector('#cancelzone');
 
@@ -308,6 +309,21 @@ export class BattleHUD {
       this.precEl && (this.precEl.inp.value = v.el);
       this.precPw && (this.precPw.inp.value = v.power * 100);
     }
+  }
+
+  /** consecutive-impact streak badge (🔥 ×N from 2 hits, no misses between) */
+  setStreak(n) {
+    if (!this.streakEl) return;
+    if (n >= 2) {
+      const txt = `🔥 ×${n}`;
+      if (this.streakEl.textContent !== txt) {
+        this.streakEl.textContent = txt;
+        this.streakEl.classList.remove('pop');
+        void this.streakEl.offsetWidth;
+        this.streakEl.classList.add('pop');
+      }
+      this.streakEl.style.display = '';
+    } else this.streakEl.style.display = 'none';
   }
 
   setCep(m) {

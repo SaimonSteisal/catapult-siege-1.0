@@ -225,6 +225,21 @@ await tap('Настройки'); await wait(600);
   log('настройки: слайдер «Музыка» меняется тачем', !!slider && after !== before, `${before} → ${after}`);
 }
 {
+  const before = await page.evaluate(() => window.__GAME__.world.renderer.shadowMap.enabled);
+  const r = await tap(null, { rowText: 'Тени' });
+  const after = await page.evaluate(() => ({ on: window.__GAME__.world.renderer.shadowMap.enabled, set: window.__S__().settings.shadows }));
+  log('настройки: «Тени» переключают shadowMap.live', r.tapped && after.on !== before && after.set === false, JSON.stringify(after));
+  await tap(null, { rowText: 'Тени' });   // вернуть
+  await new Promise((rr) => setTimeout(rr, 400));
+}
+{
+  const r = await tap(null, { rowText: 'Пост-обработка' });
+  const after = await page.evaluate(() => ({ s: window.__S__().settings.postFx, want: window.__GAME__.world.postFxWanted, en: window.__GAME__.world.postEnabled, ok: window.__GAME__.world.postSelfOk }));
+  log('настройки: «Пост-обработка».toggle (с GPU-гардом)', r.tapped && after.s === false && after.want === false && after.en === (after.s !== false && after.ok !== false), JSON.stringify(after));
+  await tap(null, { rowText: 'Пост-обработка' });   // вернуть
+  await new Promise((rr) => setTimeout(rr, 400));
+}
+{
   const r = await tap('Импорт сейва');
   await wait(500);
   const modal = await page.evaluate(() => !!document.querySelector('.modal-bg textarea'));

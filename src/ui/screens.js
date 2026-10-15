@@ -106,7 +106,7 @@ BUILDERS.menu = function () {
     mb('⚔️', t('menu_continue'), next ? `${chapterName(next.chapter, s.lang)} · ${next.title}` : t('menu_campaign'), () => this.show('briefing', { mission: next || generateMission(1, 0) }), 'primary wide'),
     el('div', { class: 'menu-grid' }, [
       mb('🗺️', t('menu_campaign'), `${S().lang === 'en' ? 'Missions' : 'Миссии'}: ${Object.keys(s.progress.bestRank).length}/40`, () => this.show('contracts')),
-      mb('📅', t('menu_daily'), s.progress.daily.done ? '✓' : '!', () => {
+      mb('📅', t('menu_daily'), s.progress.daily.done ? '✓' : ((s.progress.daily.loginStreak || 1) > 1 ? `🔥${s.progress.daily.loginStreak}` : '!'), () => {
         if (S().progress.daily.done) { Audio.uiError(); toast(t('daily_done'), '', 2400); return; }
         this.show('briefing', { mission: dailyContract() });
       }),
@@ -138,7 +138,7 @@ function countOwnedTech() {
 function pendingCamp() {
   const s = S();
   let n = 0;
-  for (const k in s.camp.buildings) n += s.camp.buildings[k].stored || 0;
+  for (const k in s.camp.buildings) n += Math.floor(s.camp.buildings[k].stored || 0);
   return n;
 }
 
@@ -211,6 +211,7 @@ BUILDERS.briefing = function ({ mission }) {
     [t('brief_distance'), `${mission.dist} м`],
     [t('brief_wind'), `${mission.windPreview} м/с`],
     [t('brief_garrison'), `${mission.garrison}`],
+    mission.garrisonSpec ? [t('brief_garrison_comp'), `🏹×${mission.garrisonSpec.archer} 🗡×${mission.garrisonSpec.spear} 🛠×${mission.garrisonSpec.engineer} ⚙×${mission.garrisonSpec.crew}`] : null,
     [t('brief_modifier'), `${mission.mod.ru} ×${mission.mod.reward.toFixed(2)}`],
     [t('brief_supply'), `${mission.supply} 📦`],
   ];
@@ -335,6 +336,8 @@ BUILDERS.results = function ({ report, mission, failed }) {
     [`${t('res_loot')} · блоки`, `${report.blocksDestroyed}`],
   ];
   if (report.perfectShots) lines.push([t('hint_perfect'), `×${report.perfectShots}`]);
+  if (report.bestStreak >= 2) lines.push([`🔥 ${t('res_streak')}`, `×${report.bestStreak}`]);
+  if (report.garrisonTotal && report.garrisonKilled) lines.push([`🗡 ${t('res_garrison_killed')}`, `${report.garrisonKilled}/${report.garrisonTotal}`]);
   if (report.repairs) lines.push([t('hud_repair'), `×${report.repairs}`]);
   if (report.civilianDestroyed) lines.push([t('res_penalty'), `−${report.civilianDestroyed * CFG.blocks.civilianPenaltyCoins} 🪙`]);
   for (const [k, v] of lines) card.appendChild(el('div', { class: 'stat-line', html: `<span class="muted">${k}</span><b class="v">${v}</b>` }));
@@ -417,7 +420,7 @@ BUILDERS.workshop = function () {
     const affordable = canAfford(cost);
     const rankNeed = CFG.tech.rankRequiredPerLevel[next] || 0;
 
-    card.append(
+    const kids = [
       el('div', { class: 'branch-head' }, [
         el('span', { class: 'ic', text: b.icon }),
         el('span', { class: 'nm', text: b.ru }),
@@ -425,31 +428,39 @@ BUILDERS.workshop = function () {
       ]),
       pips,
       el('div', { class: 'small muted', style: { margin: '8px 0', lineHeight: '1.45' }, html: effectText(br, lvl, lvl + 1) }),
-      lvl < b.levels && rankNeed > (s.progress.rank || 0)
-        ? el('div', { class: 'small', style: { color: '#f0a89c', marginBottom: '6px' }, text: `🔒 ${t('ws_need_rank')}: ${rankListName(rankNeed)}` })
-        : null,
-      lvl >= b.levels
-        ? el('div', { class: 'tag gold', text: t('max') })
-        : el('div', { class: 'row spread wrap', style: { gap: '8px' } }, [
-          el('div', { class: 'row wrap', style: { gap: '5px' } },
-            Object.entries(cost).filter(([, v]) => v > 0).map(([k, v]) => el('span', { class: 'res', html: `<span class="ic">${RES.icon[k]}</span>${v}` }))),
-          el('button', {
-            class: 'btn small ' + (affordable && unlocked ? 'primary' : 'ghost'),
-            disabled: !(affordable && unlocked),
-            text: !unlocked && rankNeed > (s.progress.rank || 0) ? `${t('ws_need_rank')} ${rankNeed + 1}` : t('upgrade'),
-            onclick: () => {
-              const r = buyBranch(br);
-              if (r.ok) {
-                Audio.uiUnlock();
-                const gained = namedGain(br, r.level);
-                toast(`${b.icon} ${b.ru} → ур.${r.level}${gained ? ': ' + gained : ''}`, 'good', 3000);
-                this.show('workshop');
-              }
-              else { Audio.uiError(); toast(r.reason === 'locked' ? t('locked') : t('not_enough'), 'bad'); }
-            },
-          }),
-        ])
-    );
+    ];
+    if (lvl < b.levels && rankNeed > (s.progress.rank || 0)) {
+      kids.push(el('div', { class: 'small', style: { color: '#f0a89c', marginBottom: '6px' }, text: `🔒 ${t('ws_need_rank')}: ${rankListName(rankNeed)}` }));
+    }
+    if (lvl >= b.levels) {
+      kids.push(el('div', { class: 'tag gold', text: t('max') }));
+    } else {
+      const costChips = Object.entries(cost).filter(([, v]) => v > 0)
+        .map(([k, v]) => el('span', { class: 'res' + ((s.resources[k] || 0) < v ? ' lack' : ''), html: `<span class="ic">${RES.icon[k]}</span>${v}` }));
+      kids.push(el('div', { class: 'row spread wrap', style: { gap: '8px' } }, [
+        el('div', { class: 'row wrap', style: { gap: '5px' } }, costChips),
+        // NOT disabled: a greyed no-op button feels broken — tap must explain itself
+        el('button', {
+          class: 'btn small ' + (affordable && unlocked ? 'primary' : 'ghost'),
+          style: affordable && unlocked ? null : { opacity: '.55' },
+          text: !unlocked && rankNeed > (s.progress.rank || 0) ? `${t('ws_need_rank')} ${rankNeed + 1}` : t('upgrade'),
+          onclick: () => {
+            const r = buyBranch(br);
+            if (r.ok) {
+              Audio.uiUnlock();
+              const gained = namedGain(br, r.level);
+              toast(`${b.icon} ${b.ru} → ур.${r.level}${gained ? ': ' + gained : ''}`, 'good', 3000);
+              this.show('workshop');
+            } else {
+              Audio.uiError();
+              const bpShort = cost.blueprints && (s.resources.blueprints || 0) < cost.blueprints;
+              toast(r.reason === 'locked' ? t('locked') : (bpShort ? t('need_blueprints') : t('not_enough')), 'bad', 3400);
+            }
+          },
+        }),
+      ]));
+    }
+    card.append(...kids);
     body.appendChild(card);
   }
 
@@ -603,8 +614,8 @@ BUILDERS.camp = function () {
   const icons = { quarry: '⛏️', sawmill: '🪓', mine: '⚒️', ropery: '🪢', still: '🔥' };
   const card = el('div', { class: 'card' });
   card.append(el('h2', { text: t('cp_title') }), el('div', { class: 'row spread', style: { marginBottom: '9px' } }, [
-    el('span', { class: 'muted small', text: `${t('cp_stored')}: ${fmt(pendingCamp())}` }),
-    el('button', { class: 'btn small primary', text: t('cp_collect_all'), onclick: () => { const n = collectAll(); if (n > 0) { Audio.coins(4); toast(`+${fmt(n)}`, 'good'); this.show('camp'); } else Audio.uiError(); } }),
+    el('span', { class: 'muted small', text: `${t('cp_stored')}: ${fmt(Math.floor(pendingCamp()))}` }),
+    el('button', { class: 'btn small primary', text: t('cp_collect_all'), onclick: () => { const n = collectAll(); if (n > 0) { Audio.coins(4); toast(`+${fmt(n)}`, 'good'); this.show('camp'); } else { Audio.uiError(); toast(t('camp_nothing'), '', 2000); } } }),
   ]));
   body.appendChild(card);
 
@@ -619,11 +630,11 @@ BUILDERS.camp = function () {
       el('div', { class: 'ic', text: icons[key] }),
       el('div', { class: 'info' }, [
         el('div', { class: 'row spread' }, [el('span', { class: 'nm', text: def.ru }), el('span', { class: 'tag', text: lvl ? `${t('level')} ${lvl}` : t('locked') })]),
-        lvl ? el('div', { class: 'small muted', text: `${t('cp_rate')}: ${campRate(key, lvl).toFixed(1)} · ${t('cp_stored')}: ${fmt(b.stored || 0)}/${fmt(cap)} ${RES.icon[def.res]}` })
+        lvl ? el('div', { class: 'small muted', text: `${t('cp_rate')}: ${campRate(key, lvl).toFixed(1)} · ${t('cp_stored')}: ${fmt(Math.floor(b.stored || 0))}/${fmt(cap)} ${RES.icon[def.res]}` })
           : el('div', { class: 'small muted', text: '—' }),
         lvl ? (() => { const bar = el('div', { class: 'bar thin', style: { marginTop: '5px' } }); bar.appendChild(el('i', { style: { width: pct((b.stored || 0) / cap) + '%' } })); return bar; })() : null,
         el('div', { class: 'row wrap', style: { gap: '6px', marginTop: '7px' } }, [
-          lvl ? el('button', { class: 'btn small ghost', text: t('cp_collect'), onclick: () => { const n = collectBuilding(key); n > 0 ? (Audio.coins(3), this.show('camp')) : Audio.uiError(); } }) : null,
+          lvl ? el('button', { class: 'btn small ghost', text: t('cp_collect'), onclick: () => { const n = collectBuilding(key); if (n > 0) { Audio.coins(3); this.show('camp'); } else { Audio.uiError(); toast(t('camp_nothing'), '', 2000); } } }) : null,
           el('button', {
             class: 'btn small primary', text: `${lvl ? t('upgrade') : t('buy')} · ` + Object.entries(cost).map(([k, v]) => `${RES.icon[k]}${v}`).join(' '),
             onclick: () => { const r = upgradeBuilding(key); r.ok ? (Audio.uiUnlock(), this.show('camp')) : (Audio.uiError(), toast(t('not_enough'), 'bad')); },
@@ -671,7 +682,7 @@ BUILDERS.ammo = function () {
     card.append(
       el('div', { class: 'row spread' }, [
         el('b', { text: `${a.ru}` }),
-        open ? el('span', { class: 'tag good', text: t('cw_ready') }) : el('span', { class: 'tag bad', text: `${t('locked')} · ${t('level')} ${a.unlock}` }),
+        open ? el('span', { class: 'tag good', text: t('cw_ready') }) : el('span', { class: 'tag bad', html: ammoLockLabel(id, a) }),
       ]),
       el('div', { class: 'small muted', style: { margin: '4px 0' }, text: t('ammo_' + id + '_d') }),
       el('div', { class: 'row wrap', style: { gap: '6px' } }, [
@@ -688,6 +699,16 @@ BUILDERS.ammo = function () {
   }
   return this.screen('', [this.head(t('aw_title'), () => this.show('menu')), body]);
 };
+
+/** lock label: rank name required + the tech branch alternative that also opens it */
+function ammoLockLabel(id, a) {
+  const s = S();
+  const list = (s.lang || 'ru') === 'en' ? CFG.ranks.listEn : CFG.ranks.list;
+  let out = `${t('locked')} · ${t('ws_need_rank')}: ${list[clamp(a.unlock, 0, list.length - 1)]}`;
+  const node = Object.entries(CFG.tech.effects.ordnance.nodes || {}).find(([, v]) => v === 'ammo_' + id);
+  if (node) out += ` · ${t('ammo_tech_alt', { b: t('ws_branch_ordnance'), n: node[0] })}`;
+  return out;
+}
 
 // ---------------------------------------------------------------- SETTINGS --
 // `origin` tells where "back" must return to: opening settings from the pause
@@ -744,6 +765,8 @@ BUILDERS.settings = function (params = {}) {
   seg(g, t('st_quality'), 'quality', [{ v: 0, l: t('st_q_high') }, { v: 1, l: t('st_q_med') }, { v: 2, l: t('st_q_low') }],
     { onPick: (v) => { set.quality = v; set.autoQuality = false; }, rebuild: true });
   toggle(g, t('st_quality_auto'), 'autoQuality');
+  toggle(g, t('st_shadows'), 'shadows');
+  toggle(g, t('st_post'), 'postFx');
   toggle(g, t('st_camera_dynamic'), 'cameraDynamic');
   toggle(g, t('st_fps'), 'showFps', (v) => { CFG.dev.showFps = v; });
 

@@ -77,6 +77,17 @@ export function generateMission(chapter, index, opts = {}) {
     engines: clamp(Math.round(chapter * 0.7 + rng.int(0, 1)), 0, 4),
   };
 
+  // garrison composition (deterministic — same seed, same squad); the fort
+  // builder exposes slots, Enemy.setup fills them by role (plan §3)
+  {
+    const sh = MC.garrisonShares;
+    const archerBonus = (kind === 'DEFEND' || kind === 'SNIPER') ? MC.defendArcherBonus : 0;
+    const archer = Math.round(m.garrison * Math.min(0.8, sh.archer + archerBonus));
+    const engineer = m.engines > 0 ? Math.max(1, Math.round(m.garrison * sh.engineer)) : 0;
+    const spear = Math.max(0, m.garrison - archer - engineer);
+    m.garrisonSpec = { archer, spear, engineer, crew: m.engines * 2, commander: 1 };
+  }
+
   // ---- objectives per kind
   switch (kind) {
     case 'DEMOLISH':
@@ -205,7 +216,7 @@ function previewReward(chapter, kind, mod) {
     stone: Math.round((26 + chapter * 7) * (mod.loot || 1)),
     wood: Math.round((18 + chapter * 5) * (mod.loot || 1)),
     metal: Math.round((6 + chapter * 2.4) * (mod.loot || 1)),
-    blueprints: chapter >= 3 ? 1 : 0,
+    blueprints: chapter >= 2 ? 1 : 0,
   };
 }
 
@@ -270,6 +281,7 @@ export function trainingMission() {
   m.training = true;
   m.garrison = 0;      // no return fire on the training ground
   m.engines = 0;
+  m.garrisonSpec = { archer: 0, spear: 0, engineer: 0, crew: 0, commander: 0 };
   m.rewardPreview = { coins: 0, stone: 0, wood: 0, metal: 0, blueprints: 0 };
   return m;
 }

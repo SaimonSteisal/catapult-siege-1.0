@@ -118,6 +118,7 @@ export class Trebuchet {
     for (const n of TB.nodes) this.nodes[n] = { id: n, hp: TB.nodeHp[n], max: TB.nodeHp[n], mats: [], baseColors: [] };
 
     this._build();
+    this.root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
     this.setAim(0, 45, 0.7);
     this.update(0, 0);
   }
