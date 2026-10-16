@@ -66,6 +66,7 @@ export function defaultState() {
       haptics: true,
       cameraDynamic: true,
       aimAssist: true,
+      autoCorrect: false,   // 1.5.0: miss auto-correction is opt-in now
       ghostTrail: true,
       showPredict: true,
       precisionAim: false,

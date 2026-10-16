@@ -129,6 +129,22 @@ await new Promise((r) => setTimeout(r, 1200));
 const surv = await G(() => ({ gs: window.__GAME__.survivedSeconds, es: window.__GAME__.economy.survivedSeconds }));
 check('economy.survivedSeconds живёт', typeof surv.es === 'number', JSON.stringify(surv));
 
+// ---- 6b. Пульт 1.5.0: окно «Точный» удалено, power-полоса на месте
+{
+  const gone = await G(() => !document.querySelector('#hud .hud-panel input[type=range]'));
+  const strip = await G(() => !!document.querySelector('#powerstrip'));
+  check('панель «Точный» удалена, power-полоса есть', gone && strip);
+  const loc = await G(() => { const r = document.querySelector('#powerstrip').getBoundingClientRect(); return { x: r.left + r.width * 0.5, y: r.top + r.height / 2 }; });
+  await page.touchscreen.touchStart(loc.x, loc.y);
+  await page.touchscreen.touchMove(loc.x + 2, loc.y);   // aimmove применяет значение полосы
+  await page.touchscreen.touchEnd();
+  await new Promise((r) => setTimeout(r, 400));
+  const pw = await G(() => window.__GAME__.hud.aimValues.power);
+  check('power-полоса: середина = 65%', Math.abs(pw - 0.65) < 0.03, 'power=' + pw.toFixed(2));
+  const st = await G(() => ({ ac: window.__S__().settings.autoCorrect, has: 'autoCorrect' in window.__S__().settings }));
+  check('autoCorrect в сейве, default OFF', st.has && st.ac === false, JSON.stringify(st));
+}
+
 // ---- 7. Настройки: флаги dev сохраняются в сейв и применяются
 const devFlags = await G(() => {
   const s = window.__S__().settings;

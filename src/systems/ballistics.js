@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { CFG } from '../config.js';
 import { clamp, makeRng, _v1, _v2, _v3, DEG } from '../core/utils.js';
+import { rulesFor } from './flightRules.js';
 
 const BALL = CFG.ballistics;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -96,19 +97,25 @@ export class Ballistics {
     if (body.impactHandled) return;
     const ammo = body.ammo;
 
-    // fuse (explosive) — detonate slightly after contact
+    // fuse (explosive) — detonate after fuseSec of GAME time (pause-safe, mirrorable)
     if (ammo.fuse) {
       if (!body.fuseStarted) {
         body.fuseStarted = true;
+        body.fuseT = ammo.fuse;
         body.vel.multiplyScalar(0.35);
-        setTimeout(() => { if (body.alive) this._detonate(body, point || body.pos, normal); }, ammo.fuse * 1000);
+        body.vel.y -= 6;
       }
       return;
     }
 
     if (target === 'terrain') {
       body.impactHandled = true;
-      this._detonateOrImpact(body, point || body.pos, normal, 'terrain');
+      // blast ammo detonates on ground contact too (grapeshot vs field infantry!)
+      if (rulesFor(ammo.id, (this.game.mods && this.game.mods.flags) || {}).terrainDetonate) {
+        this._detonate(body, point || body.pos, normal);
+      } else {
+        this._detonateOrImpact(body, point || body.pos, normal, 'terrain');
+      }
       return;
     }
 
@@ -285,6 +292,12 @@ export class Ballistics {
         }
       }
       if (p.fuseArmed > 0) p.fuseArmed -= dt;
+      if (p.fuseT > 0) {
+        p.fuseT -= dt;
+        if (p.fuseT <= 0 && p.alive) {
+          this._detonate(p, p.pos.clone(), null);
+        }
+      }
       if (!p.alive || p.life <= 0 || p.age > 16) {
         this._retire(p, i);
       }
@@ -299,7 +312,7 @@ export class Ballistics {
     if (idx >= 0) this.game.physics.activeBodies.splice(idx, 1);
     if (i === undefined) i = this.projectiles.indexOf(p);
     if (i >= 0) this.projectiles.splice(i, 1);
-    p.impactHandled = false; p.fuseStarted = false; p.splashed = false;
+    p.impactHandled = false; p.fuseStarted = false; p.splashed = false; p.fuseT = 0;
     this.pool.push(p);
     if (this.onRetire) this.onRetire(p);
   }
@@ -326,6 +339,86 @@ export class Ballistics {
       stopOnBlock: true,
       mass: ammo.mass,
     });
+  }
+
+  /** short continuation segment with explicit integration (fuse/pierce/bounce) */
+  _integrateSeg(from, vel, dur, dt, ammoId, windT0, stopBlocks = true) {
+    const ammo = CFG.ammo[ammoId] || CFG.ammo.stone;
+    const pos = from.clone(), v = vel.clone();
+    const w = new THREE.Vector3();
+    const pts = [];
+    let t = 0, hit = null;
+    const coupling = windCouplingFor(ammo);
+    while (t < dur) {
+      this.game.physics.windVecAt((windT0 !== undefined ? windT0 : this.game.time) + t, w);
+      v.addScaledVector(this.game.physics.gravity, dt);
+      const sp = v.length();
+      if (sp > 0.001 && ammo.drag > 0) v.addScaledVector(v, -clamp(ammo.drag * sp * sp * dt / sp, 0, 0.9));
+      v.addScaledVector(_v3.copy(w).sub(v), coupling * dt);
+      pos.addScaledVector(v, dt);
+      t += dt;
+      pts.push(pos.clone());
+      const c = this.game.physics.testContact(pos, CFG.physics.projectileRadius, stopBlocks);
+      if (c && (stopBlocks || c.type === 'terrain')) { hit = c; break; }
+    }
+    return { pts, end: pos.clone(), hit, t, hitVel: v.clone() };
+  }
+
+  /**
+   * Full flight truth (plan §3): the arc ends where the SHELL ENDS — fuse burn
+   * after contact, ground detonation of blast ammo, pierce chain, one bounce —
+   * with wind evolving exactly as it will during the real flight.
+   */
+  predictFull(origin, dir, speed, ammoId, opt = {}) {
+    const flags = (this.game.mods && this.game.mods.flags) || {};
+    const rules = rulesFor(ammoId, flags);
+    const dt = opt.dt || 0.06;
+    const pts = this.predict(origin, dir, speed, ammoId, { points: opt.points || 110, dt, windT0: opt.windT0 });
+    const hit = pts.hit || null;
+    const contact = hit ? hit.point : (pts.length ? pts[pts.length - 1] : null);
+    const tof0 = pts.tHit !== undefined ? pts.tHit : (pts.tEnd || pts.length * dt);
+    const out = {
+      pts, hit, contact,
+      detonation: contact ? contact.clone() : null,
+      radius: rules.blastRadius, tof: tof0,
+      fusePts: null, bouncePts: null, piercePts: null,
+      fuse: rules.fuseSec > 0,
+    };
+    if (!contact) return out;
+    const vHit = (pts.hitVel || pts.velEnd || dir.clone().multiplyScalar(speed * 0.6)).clone();
+    const wT = opt.windT0 !== undefined ? opt.windT0 + tof0 : undefined;
+    if (rules.fuseSec > 0) {
+      const v = vHit.clone().multiplyScalar(rules.fuseVelMul); v.y -= rules.fuseDrop;
+      const seg = this._integrateSeg(contact, v, rules.fuseSec, CFG.ballistics.fuseDt, ammoId, wT, true);
+      out.fusePts = seg.pts;
+      out.detonation = seg.hit ? seg.hit.point.clone() : seg.end.clone();
+      out.tof += seg.t;
+    } else if (rules.pierce && hit && hit.type === 'block') {
+      const chain = [];
+      let p0 = contact.clone();
+      let v0 = vHit.clone().multiplyScalar(rules.pierce.velMul);
+      let n = 0;
+      while (n++ < rules.pierce.max) {
+        const seg = this._integrateSeg(p0, v0, 1.1, 0.05, ammoId, wT, true);
+        chain.push(...seg.pts);
+        if (!seg.hit || seg.hit.type !== 'block') { out.detonation = seg.end.clone(); out.tof += seg.t; break; }
+        p0 = seg.hit.point.clone();
+        v0 = seg.hitVel.multiplyScalar(rules.pierce.velMul);
+        out.tof += seg.t;
+      }
+      if (chain.length) out.piercePts = chain;
+    } else if (rules.bounce && hit && hit.type === 'terrain' && vHit.length() > 8) {
+      const nrm = hit.normal || new THREE.Vector3(0, 1, 0);
+      const vn = vHit.dot(nrm);
+      const v0 = vHit.clone().addScaledVector(nrm, -(1 + rules.bounce.e) * vn);
+      const damp = 1 - rules.bounce.friction * 0.4;
+      v0.x *= damp; v0.z *= damp;
+      const seg = this._integrateSeg(contact, v0, CFG.ballistics.bounceShowSec, 0.05, ammoId, wT, true);
+      out.bouncePts = seg.pts;
+      out.tof += seg.t;
+      if (seg.hit) out.detonation = seg.hit.point.clone();
+    }
+    return out;
   }
 
   /** Monte-Carlo CEP (circular error probable) in metres at the predicted impact */

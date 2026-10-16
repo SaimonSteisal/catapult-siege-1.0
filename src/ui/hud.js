@@ -18,7 +18,6 @@ export class BattleHUD {
     this.game = game;
     this.root = root;
     this.visible = false;
-    this.precision = false;
     this.aimValues = { az: 0, el: 45, power: 0.7 };
     this._build();
     this._bind();
@@ -70,9 +69,6 @@ export class BattleHUD {
     this.targetBar.innerHTML = `<div class="tb-n"></div><div class="bar thin"><i style="width:100%"></i></div>`;
     this.node.appendChild(this.targetBar);
 
-    // ---- precision sliders
-    this.precPanel = el('div', { class: 'hud-panel', style: { position: 'absolute', left: 'calc(8px + var(--safe-l))', bottom: 'calc(40vh + 16px)', width: 'min(58vw,260px)', display: 'none' } });
-    this.node.appendChild(this.precPanel);
 
     // ---- bottom cluster
     const bottom = el('div', { class: 'hud-bottom' });
@@ -86,6 +82,7 @@ export class BattleHUD {
       <div class="axis axis-p">⤢ ${t('hud_pwr')}</div>
       <div class="knob"><b>◎</b></div>
       <div class="hint">${t('hud_drag_hint')}</div>
+      <div id="powerstrip"><i></i><b>70%</b></div>
       <div id="cancelzone">${t('hud_cancel_hint')}</div>`;
     this.knob = this.aimPad.querySelector('.knob');
     this.readAz = this.aimPad.querySelector('.az');
@@ -95,6 +92,9 @@ export class BattleHUD {
     this.streakEl = this.aimPad.querySelector('.streak');
     this.hintEl = this.aimPad.querySelector('.hint');
     this.cancelEl = this.aimPad.querySelector('#cancelzone');
+    this.stripEl = this.aimPad.querySelector('#powerstrip');
+    this.stripFill = this.stripEl.querySelector('i');
+    this.stripVal = this.stripEl.querySelector('b');
 
     // right column
     const right = el('div', { class: 'hud-right' });
@@ -103,15 +103,14 @@ export class BattleHUD {
     this.ammoStrip = el('div', { class: 'ammo-strip' });
     this.fireBtn = el('button', { id: 'firebtn', html: `${t('hud_fire')}<span class="sub"></span>` });
 
-    // tools: repair (hold), inspect, precision, pause
+    // tools: repair (hold), inspect, camera, tester, pause
     this.repairBtn = el('button', { class: 'tool-btn', html: `<span class="ic">🛠️</span><span>${t('hud_repair')}</span>` });
     this.inspectBtn = el('button', { class: 'tool-btn', html: `<span class="ic">🔍</span><span>${t('hud_inspect')}</span>` });
-    this.precBtn = el('button', { class: 'tool-btn', html: `<span class="ic">🎚️</span><span>${t('hud_aim_mode')}</span>` });
     this.camBtn = el('button', { class: 'tool-btn', title: t('cam_reset'), html: `<span class="ic">⌂</span>`, onclick: () => { Audio.uiTap(); this.game.resetCamera(); } });
     this.pauseBtn = el('button', { class: 'tool-btn', html: `<span class="ic">⏸</span>` });
     this.testBtn = el('button', { class: 'tool-btn', title: 'Tester mode', html: `<span class="ic">🧪</span>`, onclick: () => { Audio.uiTap(); this.game.toggleDevPanel(); } });
     this.testBtn.style.display = S().settings.testerMode ? '' : 'none';
-    this.toolRow.append(this.repairBtn, this.inspectBtn, this.precBtn, this.camBtn, this.testBtn, this.pauseBtn);
+    this.toolRow.append(this.repairBtn, this.inspectBtn, this.camBtn, this.testBtn, this.pauseBtn);
 
     right.append(this.skillRow, this.ammoStrip, this.toolRow, this.fireBtn);
     bottom.append(this.aimPad, right);
@@ -126,38 +125,9 @@ export class BattleHUD {
     this.node.appendChild(this.subsEl);
 
     this.root.appendChild(this.node);
-    this._buildPrecision();
     requestAnimationFrame(() => this._syncZones());
     window.addEventListener('resize', () => this._syncZones());
     window.addEventListener('orientationchange', () => setTimeout(() => this._syncZones(), 220));
-  }
-
-  _buildPrecision() {
-    clear(this.precPanel);
-    const mk = (label, key, min, max, step, fmtFn) => {
-      const row = el('div', { style: { marginBottom: '8px' } });
-      const lab = el('div', { class: 'row spread small', html: `<span>${label}</span><b data-v></b>` });
-      const inp = el('input', { type: 'range', min, max, step, value: this.aimValues[key], style: { width: '100%', accentColor: '#d9a62e' } });
-      const vEl = lab.querySelector('[data-v]');
-      const upd = () => {
-        const raw = parseFloat(inp.value);
-        this.aimValues[key] = key === 'power' ? clamp(raw / 100, 0, 1) : raw;
-        vEl.textContent = fmtFn(key === 'power' ? this.aimValues[key] : raw);
-        this.game.hudAimChanged(this.aimValues);
-      };
-      inp.addEventListener('input', upd);
-      upd();
-      row.append(lab, inp);
-      this.precPanel.appendChild(row);
-      return { inp, upd };
-    };
-    this.precAz = mk(t('hud_az'), 'az', CFG.ballistics.azimuthMin, CFG.ballistics.azimuthMax, CFG.aim.precisionStepDeg, (v) => v.toFixed(1) + '°');
-    this.precEl = mk(t('hud_el'), 'el', CFG.ballistics.elevationMin, CFG.ballistics.elevationMax, CFG.aim.precisionStepDeg, (v) => v.toFixed(1) + '°');
-    // power is stored internally as 0..1 — the slider works in percent but must
-    // write back the fraction (this was the "8400%" HUD bug)
-    this.precPw = mk(t('hud_pwr'), 'power', CFG.ballistics.powerMin * 100, CFG.ballistics.powerMax * 100, 1, (v) => Math.round(v * 100) + '%');
-    const close = el('button', { class: 'btn small ghost', style: { width: '100%' }, text: t('close'), onclick: () => this.togglePrecision(false) });
-    this.precPanel.appendChild(close);
   }
 
   _syncZones() {
@@ -166,15 +136,14 @@ export class BattleHUD {
     const vpR = vp.getBoundingClientRect();
     const r = this.aimPad.getBoundingClientRect();
     // NOTE: #cancelzone is display:none until a drag starts, so its rect can NOT
-    // be measured here (it was all zeros => cancel never triggered on device).
-    // Derive the centre from the pad rect + the CSS offsets (left:14 bottom:14, 92px).
-    // Left-handed mode mirrors the zone to the right side (see style.css).
-    const size = 92, off = 14;
+    // be measured here. Derive the centre from the pad rect + CSS offsets:
+    // the circle now lives at the LEFT END of the power strip (bottom:44px, left:10px).
+    const size = 92, off = 10, stripGap = 44;
     const leftHanded = !!S().settings.leftHanded;
     const cx = leftHanded
       ? (r.left - vpR.left) + r.width - off - size / 2
       : (r.left - vpR.left) + off + size / 2;
-    const cy = (r.top - vpR.top) + r.height - off - size / 2;
+    const cy = (r.top - vpR.top) + r.height - stripGap - size / 2;
     Input.setAimZone(
       { x: r.left - vpR.left, y: r.top - vpR.top, w: r.width, h: r.height },
       { x: cx, y: cy },
@@ -193,29 +162,38 @@ export class BattleHUD {
 
   // ------------------------------------------------------------------- bind ---
   _bind() {
-    Input.on('aimstart', () => {
+    Input.on('aimstart', (d) => {
       this.aimPad.classList.add('active');
       this.cancelEl.classList.add('on');
       this.hintEl.style.opacity = '0';
       this._aimStart = { ...this.aimValues };
       this._lastDx = this._lastDy = 0;
+      // zone by start point: the power strip never fires on release
+      const sr = this.stripEl.getBoundingClientRect();
+      this._aimZone = (d.y >= sr.top - 4) ? 'power' : 'stick';
       this.game.onAimStart();
     });
     Input.on('aimmove', (d) => {
       const st = S().settings;
       const a0 = this._aimStart || this.aimValues;
-      // absolute mapping from the touch origin: sideways = azimuth,
-      // up/down = elevation, drag distance = power delta
-      // screen-space convention: drag right => aim right on screen
-      // (camera looks along +Z, so screen right = world -X = negative azimuth)
-      this.aimValues.az = clamp(a0.az - d.dx * CFG.aim.azDegPerPx * (st.sensAz || 1), CFG.ballistics.azimuthMin, CFG.ballistics.azimuthMax);
-      this.aimValues.el = clamp(a0.el - d.dy * CFG.aim.elDegPerPx * (st.sensEl || 1) * (st.invertOrbitY ? -1 : 1), CFG.ballistics.elevationMin, CFG.ballistics.elevationMax);
-      this.aimValues.power = clamp(a0.power + d.dist * CFG.aim.powerPerPx * (st.sensPower || 1), CFG.ballistics.powerMin, CFG.ballistics.powerMax);
+      const fine = d.fine ? (CFG.aim.fineMul || 0.25) : 1;   // second finger = fine mode
+      if (this._aimZone === 'power') {
+        // absolute mapping along the strip: left = min power, right = max
+        const sr = this.stripEl.getBoundingClientRect();
+        const k = clamp((d.x - sr.left) / Math.max(1, sr.width), 0, 1);
+        const ps = CFG.aim.powerStrip || { min: CFG.ballistics.powerMin, max: CFG.ballistics.powerMax };
+        this.aimValues.power = clamp(ps.min + k * (ps.max - ps.min), CFG.ballistics.powerMin, CFG.ballistics.powerMax);
+      } else {
+        // stick zone: azimuth/elevation ONLY — power no longer coupled to drag radius
+        this.aimValues.az = clamp(a0.az - d.dx * CFG.aim.azDegPerPx * (st.sensAz || 1) * fine, CFG.ballistics.azimuthMin, CFG.ballistics.azimuthMax);
+        this.aimValues.el = clamp(a0.el - d.dy * CFG.aim.elDegPerPx * (st.sensEl || 1) * (st.invertOrbitY ? -1 : 1) * fine, CFG.ballistics.elevationMin, CFG.ballistics.elevationMax);
+      }
       this.game.hudAimChanged(this.aimValues);
-      // knob position
+      this.aimPad.classList.toggle('fine', !!d.fine);
+      // knob position (stick zone only)
       const r = this.aimPad.getBoundingClientRect();
-      const kx = clamp(r.width / 2 + d.dx, 34, r.width - 34);
-      const ky = clamp(r.height * 0.62 + d.dy, 34, r.height - 34);
+      const kx = clamp(r.width / 2 + (this._aimZone === 'stick' ? d.dx : 0), 34, r.width - 34);
+      const ky = clamp(r.height * 0.62 + (this._aimZone === 'stick' ? d.dy : 0), 34, r.height - 34 - 40);
       this.knob.style.left = kx + 'px';
       this.knob.style.top = ky + 'px';
       this.knob.style.transform = `translate(-50%,-50%) scale(${1 + this.aimValues.power * 0.35})`;
@@ -227,18 +205,23 @@ export class BattleHUD {
     });
     const endAim = () => {
       this.aimPad.classList.remove('active');
+      this.aimPad.classList.remove('fine');
       this.cancelEl.classList.remove('on');
       this.cancelEl.style.background = '';
       this.knob.style.left = '50%'; this.knob.style.top = '62%'; this.knob.style.transform = 'translate(-50%,-50%)';
       this._lastDx = this._lastDy = 0;
     };
-    Input.on('aimend', (d) => { endAim(); this.game.onAimRelease(this.aimValues); });
+    Input.on('aimend', (d) => {
+      const zone = this._aimZone;
+      endAim();
+      if (zone === 'power') { Audio.uiTap(); return; }   // strip commit ≠ shot
+      this.game.onAimRelease(this.aimValues);
+    });
     Input.on('aimcancel', () => { endAim(); this.game.onAimCancel(); Audio.uiBack(); });
 
     this.fireBtn.addEventListener('click', () => { Audio.uiTap(); vibrate(14); this.game.onFireButton(); });
     this.pauseBtn.addEventListener('click', () => { Audio.uiBack(); this.game.onPause(); });
     this.inspectBtn.addEventListener('click', () => { Audio.uiTap(); this.toggleNodes(); });
-    this.precBtn.addEventListener('click', () => { Audio.uiTap(); this.togglePrecision(); });
     holdButton(this.repairBtn, CFG.settings_repairHold || 700, () => this.game.onRepair(true), (k) => { this.repairBtn.style.background = `linear-gradient(90deg, rgba(92,138,58,.55) ${k * 100}%, rgba(20,16,12,.8) ${k * 100}%)`; },
       () => { Audio.uiError(); toast(t('hint_hold_repair'), '', 2000); });
   }
@@ -259,16 +242,6 @@ export class BattleHUD {
     this.nodePanel.style.display = on ? '' : 'none';
     if (on) this.renderNodes();
     this.game.onInspect(on);
-  }
-
-  togglePrecision(force) {
-    this.precision = force === undefined ? !this.precision : force;
-    this.precPanel.style.display = this.precision ? '' : 'none';
-    if (this.precision) {
-      this.precAz.inp.value = this.aimValues.az; this.precAz.upd();
-      this.precEl.inp.value = this.aimValues.el; this.precEl.upd();
-      this.precPw.inp.value = Math.round(this.aimValues.power * 100); this.precPw.upd();
-    }
   }
 
   setObjective(text, sub) {
@@ -304,10 +277,11 @@ export class BattleHUD {
     this.readAz.textContent = `${t('hud_az')} ${v.az.toFixed(1)}°`;
     this.readEl.textContent = `${t('hud_el')} ${v.el.toFixed(1)}°`;
     this.readPw.textContent = `${t('hud_pwr')} ${Math.round(v.power * 100)}%`;
-    if (!this.precision) {
-      this.precAz && (this.precAz.inp.value = v.az);
-      this.precEl && (this.precEl.inp.value = v.el);
-      this.precPw && (this.precPw.inp.value = v.power * 100);
+    if (this.stripFill) {
+      const ps = CFG.aim.powerStrip || { min: CFG.ballistics.powerMin, max: CFG.ballistics.powerMax };
+      const k = clamp((v.power - ps.min) / (ps.max - ps.min), 0, 1);
+      this.stripFill.style.width = (k * 100).toFixed(0) + '%';
+      this.stripVal.textContent = Math.round(v.power * 100) + '%';
     }
   }
 

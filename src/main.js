@@ -215,6 +215,17 @@ class Game {
       this.selectedTarget = best;
       this.vfx.markTarget(best.center, Math.max(2.5, this._targetRadius(best)));
       Audio.uiTap();
+      // tap-to-solve: instantly lay the current ammo on the target (aimAssist)
+      if (S().settings.aimAssist) {
+        const pt = this._targetAimPoint(best) || best.center;
+        const sol = this._solveAim(pt, this.selectedAmmo);
+        if (sol && sol.d < 12) {
+          this.trebuchet.setAim(sol.az, sol.el, clamp(sol.pw, CFG.ballistics.powerMin, CFG.ballistics.powerMax));
+          this.hud.aimValues = { az: this.trebuchet.aim.az, el: this.trebuchet.aim.el, power: this.trebuchet.aim.power };
+          this.hud.setAimReadout(this.hud.aimValues);
+          this._updatePrediction();
+        }
+      }
       const def = CFG.targetTypes[best.type] || {};
       toast(`${def.ru || best.type} · HP ${Math.round(best.hp)}/${Math.round(best.hp0)} · ${best.bounty > 0 ? '+' : ''}${best.bounty} 🪙`, '', 2100);
       this.rig.setMode('battle', { target: best.center.clone(), dist: clamp(bestD + 24, 16, 46) });
@@ -252,12 +263,13 @@ class Game {
       const k = e.key.toLowerCase();
       if (k === 'escape' || k === 'p') this.onPause();
       if (k === ' ') { e.preventDefault(); this.onFireButton(); }
-      if (k === 'arrowleft') this.trebuchet.nudgeAim(1, 0);   // screen-left = +az
-      if (k === 'arrowright') this.trebuchet.nudgeAim(-1, 0);
-      if (k === 'arrowup') this.trebuchet.nudgeAim(0, 1);
-      if (k === 'arrowdown') this.trebuchet.nudgeAim(0, -1);
-      if (k === 'q') this.aimPower(-0.05);
-      if (k === 'e') this.aimPower(0.05);
+      const mul = e.shiftKey ? (CFG.aim.fineMul || 0.25) : 1;   // Shift = fine
+      if (k === 'arrowleft') this.trebuchet.nudgeAim(1 * mul, 0);   // screen-left = +az
+      if (k === 'arrowright') this.trebuchet.nudgeAim(-1 * mul, 0);
+      if (k === 'arrowup') this.trebuchet.nudgeAim(0, 1 * mul);
+      if (k === 'arrowdown') this.trebuchet.nudgeAim(0, -1 * mul);
+      if (k === 'q') this.aimPower(-0.05 * mul);
+      if (k === 'e') this.aimPower(0.05 * mul);
       if (k === 'r') this.onRepair(true);
       if (k === 'f2' && S().settings.testerMode) { e.preventDefault(); this.toggleDevPanel(); }
     });
@@ -441,7 +453,6 @@ class Game {
     this.hud.toggleNodes(false);
     this.hud.buildAmmo();
     this.hud.buildSkills();
-    this.hud.togglePrecision(!!S().settings.precisionAim);
     this.hud.setStreak(0);
     this.hudAimChanged({ az: 0, el: 45, power: 0.7 });
     this._updateHud(0);
@@ -625,12 +636,21 @@ class Game {
     const origin = tb.predictOrigin(this._tmpV);
     const dir = tb.launchDir(this._tmpV2);
     const speed = tb.launchSpeed(tb.aim.power);
-    const pts = this.ballistics.predict(origin, dir, speed, this.selectedAmmo, { points: 110, dt: 0.06 });
+    // full flight truth: arc ends at the DETONATION point (fuse/blast/pierce/bounce),
+    // wind evolves exactly as it will during the real flight
+    const pred = this.ballistics.predictFull(origin, dir, speed, this.selectedAmmo, { points: 110, dt: 0.06, windT0: this.time });
+    const pts = pred.pts;
     const sigma = this._currentSpread();
-    let impact = pts.hit || (pts.length ? pts[pts.length - 1] : null);
-    if (impact) {
-      const pt = impact.point || impact;
-      impact = { ...impact, point: pt, groundY: this.terrain ? this.terrain.heightAt(pt.x, pt.z) : 0 };
+    let impact = null;
+    if (pred.detonation) {
+      const pt = pred.detonation;
+      const col = { boom: 0xff8a4a, shrapnel: 0xbfc6cc, fire: 0xff5a1e, bees: 0xd8b45a, pierce: 0x9aa0a6 }[ammo.vfx] || 0xffd27a;
+      impact = {
+        point: pt,
+        groundY: this.terrain ? this.terrain.heightAt(pt.x, pt.z) : 0,
+        radius: pred.radius, tof: pred.tof, color: col,
+        label: `${Math.round(pt.distanceTo(origin))} ${t('unit_m')} · ${pred.tof.toFixed(1)} ${t('unit_s')}` + (pred.radius ? ` · R ${pred.radius.toFixed(1)} ${t('unit_m')}` : ''),
+      };
     }
     // empirical spread: fire virtual sample shots through the SAME integrator
     // (walls & terrain included) so the circle shows where shells CAN land
@@ -645,23 +665,9 @@ class Game {
       impact.cx = samples.center.x; impact.cz = samples.center.z;
       impact.cgroundY = this.terrain ? this.terrain.heightAt(samples.center.x, samples.center.z) : 0;
     }
-    // «Предсказание рикошета»: second arc from the first contact point
-    let bounce = null;
-    if (this.mods.flags.ricochetPredict && pts.hit && pts.hit.point && pts.hit.normal) {
-      const n = pts.hit.normal;
-      const vIn = dir.clone().multiplyScalar(speed * 0.82);   // approx velocity at contact
-      const vn = vIn.dot(n);
-      if (vn < 0) {
-        const e = ammo.restitution || 0.25;
-        const vOut = vIn.addScaledVector(n, -(1 + e) * vn).multiplyScalar(0.92);
-        if (vOut.length() > 3) {
-          const start = pts.hit.point.clone().addScaledVector(n, 0.3);
-          const pr = this.ballistics.predict(start, vOut.clone().normalize(), vOut.length(), this.selectedAmmo, { points: 60, dt: 0.06 });
-          if (pr && pr.length > 1) bounce = pr;
-        }
-      }
-    }
-    this.vfx.showPrediction(pts, impact, samples.cep, samples.points, bounce);
+    // ghost continuation: fuse burn / bounce / pierce chain (one secondary polyline)
+    const secondary = pred.fusePts || pred.bouncePts || pred.piercePts;
+    this.vfx.showPrediction(pts, impact, samples.cep, samples.points, secondary);
     this.hud.setCep(samples.cep);
     this._prediction = { pts, impact, cep: samples.cep, sigma };
     return this._prediction;
@@ -707,8 +713,8 @@ class Game {
         .applyAxisAngle(axis, el * s)
         .normalize();
       const sp = speed * (1 + this._rngSpread() * 0.004);
-      const pr = this.ballistics.predict(origin, d, sp, this.selectedAmmo, { points: 70, dt: 0.06 });
-      const end = pr.hit ? pr.hit.point : pr[pr.length - 1];
+      const pr = this.ballistics.predictFull(origin, d, sp, this.selectedAmmo, { points: 70, dt: 0.06, windT0: this.time });
+      const end = pr.detonation || (pr.pts.length ? pr.pts[pr.pts.length - 1] : null);
       if (end) pts.push(end.clone());
     }
     if (pts.length) {
@@ -993,6 +999,7 @@ class Game {
 
   _correctionHint(missPoint, targetPoint) {
     if (!S().settings.aimAssist) return;
+    const autoApply = !!S().settings.autoCorrect;   // default OFF: the aim is yours
     const dx = targetPoint.x - missPoint.x, dz = targetPoint.z - missPoint.z;
     const short = dz;                        // fell short along the +Z firing lane
     const dist = Math.max(6, Math.hypot(dx, dz));
@@ -1002,12 +1009,16 @@ class Game {
     const a = this.hud.aimValues;
     const naz = clamp(a.az + azDelta, CFG.ballistics.azimuthMin, CFG.ballistics.azimuthMax);
     const npw = clamp(a.power + pwDelta, CFG.ballistics.powerMin, CFG.ballistics.powerMax);
-    this.trebuchet.setAim(naz, a.el, npw);
-    this.hud.aimValues = { az: naz, el: a.el, power: npw };
-    this.hud.setAimReadout(this.hud.aimValues);
-    this._updatePrediction();
+    if (autoApply) {
+      this.trebuchet.setAim(naz, a.el, npw);
+      this.hud.aimValues = { az: naz, el: a.el, power: npw };
+      this.hud.setAimReadout(this.hud.aimValues);
+      this._updatePrediction();
+    }
     if (Math.abs(azDelta) > 0.4 || Math.abs(pwDelta) > 0.01) {
-      toast(`Поправка внесена: азимут ${azDelta >= 0 ? '+' : ''}${azDelta.toFixed(1)}°, мощность ${pwDelta >= 0 ? '+' : ''}${Math.round(pwDelta * 100)}%`, '', 2400);
+      toast(autoApply
+        ? `Поправка внесена: азимут ${azDelta >= 0 ? '+' : ''}${azDelta.toFixed(1)}°, мощность ${pwDelta >= 0 ? '+' : ''}${Math.round(pwDelta * 100)}%`
+        : `Подсказка: азимут ${azDelta >= 0 ? '+' : ''}${azDelta.toFixed(1)}°, мощность ${pwDelta >= 0 ? '+' : ''}${Math.round(pwDelta * 100)}%`, '', 2400);
     }
   }
 
@@ -1254,14 +1265,14 @@ class Game {
         tb.setAim(azT, el, pw);
         const dir = tb.launchDir(this._tmpV2);
         const origin = tb.predictOrigin(this._tmpV);
-        const pts = this.ballistics.predict(origin, dir, tb.launchSpeed(pw), ammoId, { points: 160, dt: 0.045 });
-        const end = pts.hit ? pts.hit.point : pts[pts.length - 1];
+        const pred = this.ballistics.predictFull(origin, dir, tb.launchSpeed(pw), ammoId, { points: 160, dt: 0.045, windT0: this.time });
+        const end = pred.detonation || (pred.pts.length ? pred.pts[pred.pts.length - 1] : null);
         if (!end) continue;
         let d = end.distanceTo(targetPoint);
         // Scoring: contacting the selected target is best; contacting ANY hostile
         // block is still productive (a fort is contiguous); civilian hits and
         // bare-ground misses are what we avoid.
-        const hitBlock = pts.hit && pts.hit.block ? pts.hit.block : null;
+        const hitBlock = pred.hit && pred.hit.block ? pred.hit.block : null;
         if (hitBlock) {
           if (hitBlock.civilian) d += 30;
           else if (targetPoint.__cid !== undefined && hitBlock.cid === targetPoint.__cid) d *= 0.3;
@@ -1269,7 +1280,7 @@ class Game {
         } else {
           d += 2.5;
         }
-        if (!best || d < best.d) best = { d, az: azT, el, pw, pts };
+        if (!best || d < best.d) best = { d, az: azT, el, pw, pts: pred.pts };
         if (best.d < 1.1) break outer;
       }
     }

@@ -169,6 +169,24 @@ export class VFX {
       this.cepDots.push(d);
     }
 
+    // ---- blast radius ring at the predicted detonation point
+    this.blastRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.86, 1, 30),
+      new THREE.MeshBasicMaterial({ color: 0xff8a4a, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false })
+    );
+    this.blastRing.rotation.x = -Math.PI / 2;
+    this.blastRing.visible = false;
+    scene.add(this.blastRing);
+    // ---- world-anchored impact label (distance · time of flight · radius)
+    this.impactLabel = null;
+    if (domLayer) {
+      this.impactLabel = document.createElement('div');
+      this.impactLabel.className = 'impact-label';
+      this.impactLabel.style.display = 'none';
+      domLayer.appendChild(this.impactLabel);
+    }
+    this._impactWorld = new THREE.Vector3();
+
     // ---- target outline marker
     this.targetMarker = new THREE.Mesh(
       new THREE.TorusGeometry(2.2, 0.09, 6, 26),
@@ -379,7 +397,23 @@ export class VFX {
     this.predLine.geometry.setDrawRange(0, points.length);
     this.predLine.visible = true;
 
-    // second arc: where the shell goes AFTER bouncing off the surface it hit
+    // blast radius ring + label at the detonation point
+    if (impact && impact.radius > 0 && impact.point) {
+      const gy = impact.groundY !== undefined ? impact.groundY : impact.point.y;
+      this.blastRing.position.set(impact.point.x, gy + 0.14, impact.point.z);
+      this.blastRing.scale.setScalar(Math.max(0.6, impact.radius));
+      this.blastRing.material.color.setHex(impact.color || 0xff8a4a);
+      this.blastRing.visible = true;
+    } else this.blastRing.visible = false;
+    if (this.impactLabel) {
+      if (impact && impact.point && CFG.ballistics.tofLabel !== false) {
+        this._impactWorld.copy(impact.point); this._impactWorld.y += 0.6;
+        this.impactLabel.textContent = impact.label || '';
+        this.impactLabel.style.display = '';
+      } else this.impactLabel.style.display = 'none';
+    }
+
+    // second arc: fuse burn / bounce / pierce continuation
     if (bouncePoints && bouncePoints.length > 1) {
       const pos2 = [];
       for (const p of bouncePoints) pos2.push(p.x, p.y, p.z);
@@ -448,6 +482,8 @@ export class VFX {
   hidePrediction() {
     this.predLine.visible = false;
     this.predLine2.visible = false;
+    this.blastRing.visible = false;
+    if (this.impactLabel) this.impactLabel.style.display = 'none';
     this.marker.visible = false;
     this.cepDisk.visible = false;
     this.cepRing.visible = false;

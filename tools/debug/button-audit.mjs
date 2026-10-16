@@ -319,19 +319,35 @@ await tap('Полигон'); await wait(800);
 console.log('— HUD БОЯ: все 6 инструментов + чипы + умения + ОГОНЬ —');
 const TOOL = ['Ремонт (hold)', 'Осмотр', 'Точный', '⌂', '🧪', '⏸'];
 {
-  // «Точный» — панель слайдеров
-  const r = await tap('', { selectorFallback: '#hud .tool-row .tool-btn:nth-child(3)' });
-  const vis = await page.evaluate(() => {
-    const p = Array.from(document.querySelectorAll('#hud .hud-panel')).find((x) => x.querySelector('input[type=range]'));
-    return p ? p.style.display !== 'none' : false;
-  });
-  log('HUD: «Точный» открывает слайдеры', r.tapped && vis, r.tapped ? '' : r.reason + ':' + r.topCls);
-  const c = await tap('Закрыть');
-  const hid = await page.evaluate(() => {
-    const p = Array.from(document.querySelectorAll('#hud .hud-panel')).find((x) => x.querySelector('input[type=range]'));
-    return !p || p.style.display === 'none';
-  });
-  log('HUD: «Закрыть» прячет слайдеры', c.tapped && hid, c.tapped ? '' : 'точку перехватывает ' + c.topCls);
+  // power-полоса: меняет ТОЛЬКО мощность (U1-фикс) и не стреляет при отпускании
+  const before = await page.evaluate(() => ({ ...window.__GAME__.hud.aimValues, shots: window.__GAME__.shotsThisMission.length }));
+  const loc = await page.evaluate(() => { const r = document.querySelector('#powerstrip').getBoundingClientRect(); return { x: r.left + r.width * 0.9, y: r.top + r.height / 2 }; });
+  await page.touchscreen.touchStart(loc.x, loc.y);
+  await page.touchscreen.touchMove(loc.x + 3, loc.y);
+  await page.touchscreen.touchEnd();
+  await wait(500);
+  const after = await page.evaluate(() => ({ ...window.__GAME__.hud.aimValues, shots: window.__GAME__.shotsThisMission.length }));
+  log('HUD: power-полоса меняет только мощность и не стреляет',
+    Math.abs(after.power - (0.3 + 0.9 * 0.7)) < 0.03 && after.az === before.az && after.el === before.el && after.shots === before.shots,
+    JSON.stringify({ pw: +after.power.toFixed(2), az: after.az, el: after.el, shots: after.shots }));
+}
+{
+  // стик-зона: аз/выс меняются, мощность НЕ трогается
+  const before = await page.evaluate(() => ({ ...window.__GAME__.hud.aimValues }));
+  const pad = await page.evaluate(() => { const r = document.querySelector('#aimpad').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height * 0.4 }; });
+  await page.touchscreen.touchStart(pad.x, pad.y);
+  await page.touchscreen.touchMove(pad.x + 30, pad.y - 20);
+  const during = await page.evaluate(() => ({ ...window.__GAME__.hud.aimValues }));
+  await page.touchscreen.touchMove(pad.x, pad.y);
+  await page.touchscreen.touchEnd();   // релиз в стик-зоне = выстрел
+  await wait(900);
+  log('HUD: стик меняет аз/выс БЕЗ мощности', during.az !== before.az && during.el !== before.el && during.power === before.power,
+    JSON.stringify({ dAz: +(during.az - before.az).toFixed(1), dEl: +(during.el - before.el).toFixed(1), dPw: +(during.power - before.power).toFixed(3) }));
+  await wait(4000);   // договорить цикл выстрела
+}
+{
+  const gone = await page.evaluate(() => !document.querySelector('#hud .hud-panel input[type=range]') && !Array.from(document.querySelectorAll('#hud .tool-btn')).some(b => (b.textContent || '').includes('Точный')));
+  log('HUD: окно «Точный» и его кнопка удалены', gone);
 }
 {
   // «Осмотр» — панель узлов + тап по узлу
@@ -341,7 +357,7 @@ const TOOL = ['Ремонт (hold)', 'Осмотр', 'Точный', '⌂', '�
   await tapExpect('HUD: тап по узлу чинит/объясняет', '.noderow', toastShown, { selectorFallback: '.noderow' });
   await tap('', { selectorFallback: '#hud .tool-row .tool-btn:nth-child(2)' });
 }
-await tapExpect('HUD: ⌂ сброс камеры — тост', '', toastShown, { selectorFallback: '#hud .tool-row .tool-btn:nth-child(4)' });
+await tapExpect('HUD: ⌂ сброс камеры — тост', '', toastShown, { selectorFallback: '#hud .tool-row .tool-btn:nth-child(3)' });
 {
   // «Ремонт»: короткий тап обязан объяснить, что нужно удерживать
   const before = (await toasts()).join('|');
@@ -352,11 +368,14 @@ await tapExpect('HUD: ⌂ сброс камеры — тост', '', toastShown,
 }
 {
   // удержание «Ремонт» ~1.6 c → ремонт худшего узла (или «Орудие в порядке»)
-  const r = await tap('', { selectorFallback: '#hud .tool-row .tool-btn:nth-child(1)', holdMs: 1600, wait: 900 });
+  const r = await tap('', { selectorFallback: '#hud .tool-row .tool-btn:nth-child(1)', holdMs: 1200, wait: 400 });
   const tt = (await toasts()).join(' ');
   log('HUD: удержание «Ремонт» срабатывает', r.tapped && /Ремонт|Орудие в порядке|Рама|Коромысло|Стропа|Ось|Противовес|Ложе|снабжения/i.test(tt), tt.slice(0, 70));
 }
-await tapExpect('HUD: чип боеприпаса откликается', '.ammo-chip', anyResponse, { selectorFallback: '.ammo-chip' });
+await page.evaluate(() => { window.__S__().tech.ordnance = 10; window.__GAME__.hud.buildAmmo(); });   // открываем все типы, чтобы появились залоченные чипы
+await wait(400);
+await tapExpect('HUD: залоченный чип боеприпаса объясняет отказ', '.ammo-chip.locked', toastShown, { selectorFallback: '.ammo-chip.locked' });
+await page.evaluate(() => { window.__S__().tech.ordnance = 0; window.__GAME__.hud.buildAmmo(); });
 await tapExpect('HUD: кнопка умения расчёта откликается', '.skill-btn', anyResponse, { selectorFallback: '.skill-btn', extraWait: 400 });
 {
   const before = (await state()).shots;
@@ -369,7 +388,7 @@ await wait(7000);   // дождаться завершения цикла выс
 
 console.log('— ГЛАВНЫЙ РЕГРЕСС: пауза → настройки → «‹» → пауза → продолжить —');
 {
-  const r = await tap('', { selectorFallback: '#hud .tool-row .tool-btn:nth-child(6)' });
+  const r = await tap('', { selectorFallback: '#hud .tool-row .tool-btn:nth-child(5)' });
   const s = await state();
   log('HUD: ⏸ открывает паузу', r.tapped && s.ui === 'pause', r.tapped ? 'ui=' + s.ui : r.reason + ':' + r.topCls);
 }
@@ -390,7 +409,7 @@ await tapExpect('пауза: «Настройки» открывают наст�
 }
 
 console.log('— ПАУЗА: рестарт и отступление —');
-await tap('', { selectorFallback: '#hud .tool-row .tool-btn:nth-child(6)' }); await wait(600);
+await tap('', { selectorFallback: '#hud .tool-row .tool-btn:nth-child(5)' }); await wait(600);
 await tap('Начать заново'); await wait(600);
 {
   const modal = await page.evaluate(() => !!document.querySelector('.modal-bg'));
@@ -403,7 +422,7 @@ await tap('Подтвердить'); await wait(900);
 }
 await tap('В ОСАДУ'); await wait(5500);
 log('рестарт: бой снова начался', (await state()).inBattle);
-await tap('', { selectorFallback: '#hud .tool-row .tool-btn:nth-child(6)' }); await wait(600);
+await tap('', { selectorFallback: '#hud .tool-row .tool-btn:nth-child(5)' }); await wait(600);
 await tap('Отступить'); await wait(600);
 await tap('Подтвердить'); await wait(1200);
 {
@@ -415,7 +434,7 @@ await tapExpect('результаты: «В лагерь» → меню', 'В л
 console.log('— ТЕСТЕР-ПАНЕЛЬ реальным тачем —');
 await page.evaluate(() => { window.__S__().settings.testerMode = true; window.__GAME__.syncTesterUi(); });
 if (await startBattle()) {
-  await tap('', { selectorFallback: '#hud .tool-row .tool-btn:nth-child(5)' }); await wait(600);
+  await tap('', { selectorFallback: '#hud .tool-row .tool-btn:nth-child(4)' }); await wait(600);
   const open = await page.evaluate(() => document.querySelector('#devpanel').classList.contains('on'));
   log('тестер: 🧪 открывает панель тапом', open);
   await tapExpect('тестер: «+500 всех ресурсов»', '+500 всех ресурсов', (b, a) => a.coins > b.coins || a.stone > b.stone);

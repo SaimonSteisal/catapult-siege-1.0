@@ -4,7 +4,7 @@
 // ============================================================================
 
 export const CFG = {
-  VERSION: '1.4.1',
+  VERSION: '1.5.0',
   SAVE_KEY: 'catapult_siege_save',
   SAVE_VERSION: 4,
   LANG_DEFAULT: 'ru',
@@ -77,6 +77,9 @@ export const CFG = {
     predictPoints: 26,
     predictDt: 0.055,
     predictVisiblePoints: 13,
+    fuseDt: 0.03,              // integrator step after contact while the fuse burns
+    bounceMax: 1,
+    bounceShowSec: 1.4,        // how long the ghost bounce arc is integrated
     ghostTrailLife: 12,
     slowmo: { scale: 0.22, duration: 0.65, hitstop: 0.07 },
     muzzleOffset: { x: 0, y: 2.55, z: 0 },   // relative to trebuchet root
@@ -88,7 +91,11 @@ export const CFG = {
     elDegPerPx: 0.22,
     powerPerPx: 1 / 150,       // drag distance (px) that maps to full power delta
     deadZonePx: 6,
-    cancelZonePx: 92,          // radius of the bottom-left cancel zone
+    cancelZonePx: 92,          // radius of the cancel zone (left end of power strip)
+    powerStrip: { min: 0.30, max: 1.0 },
+    fineMul: 0.25,             // two-finger / Shift sensitivity multiplier
+    bounceShow: ['stone', 'granite'],
+    tofLabel: true,
     smoothing: 0.35,           // exponential smoothing of aim values
     timeFreezeOnAim: true,     // Decision D6: world pauses while aiming
     fireButton: true,

@@ -783,8 +783,8 @@ BUILDERS.settings = function (params = {}) {
   slider(ctl, t('st_sens_power'), 'sensPower', 0.4, 2.2, 0.05, (v) => v.toFixed(2) + '×');
   toggle(ctl, t('st_invert_y'), 'invertOrbitY');
   toggle(ctl, t('st_left_hand'), 'leftHanded');
-  toggle(ctl, t('st_precision'), 'precisionAim', (v) => { if (this.game.hud) this.game.hud.togglePrecision(v); });
   toggle(ctl, t('st_assist'), 'aimAssist');
+  toggle(ctl, t('st_autocorrect'), 'autoCorrect');
   toggle(ctl, t('st_predict'), 'showPredict');
   toggle(ctl, t('st_ghost'), 'ghostTrail');
 

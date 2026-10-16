@@ -46,6 +46,15 @@ export class Physics {
     return this.wind;
   }
   windSpeed() { return this.wind.length(); }
+  /** wind vector at absolute game time t (pure function of t, mirrors updateWind) */
+  windVecAt(t, out) {
+    const gust = this.windNoise(t * 0.055, 3.7, 3, 0.5);
+    const sway = Math.sin(t * 0.31) * 0.12;
+    const g = clamp(gust * 0.45 + sway, -0.55, 0.55);
+    out.copy(this.windBase).multiplyScalar(1 + g);
+    out.y = this.windBase.length() * 0.045 * g;
+    return out;
+  }
   /** forecast helper: wind magnitude at time t WITHOUT mutating state
    *  (updateWind is a pure function of t, so this mirrors it) — used by the
    *  «Чтец ветра» synergy to show the wind 3 s ahead */
@@ -164,41 +173,48 @@ export class Physics {
     const {
       drag = 0.0009, windAffected = true, windCoupling = 0.030,
       points = CFG.ballistics.predictPoints, dt = CFG.ballistics.predictDt,
-      maxTime = 9, stopOnBlock = true, mass = 40,
+      maxTime = 9, stopOnBlock = true, mass = 40, windT0 = undefined,
     } = opt;
     const out = [];
     const pos = _tmpVecA.copy(from);
     const v = _tmpVecB.copy(vel);
+    const wv = windT0 !== undefined ? new (this.wind.constructor)() : null;
     const body = { pos, vel: v, radius: P.projectileRadius, drag, windAffected, windCoupling, restitution: 0.2, friction: 0.2, alive: true, collidesBlocks: true, spin: null };
     let hit = null;
     // the horizon must cover the WHOLE flight (lobs take 3-5 s), otherwise the
     // solver only ever sees flat solutions and "discovers" nothing behind the apex
     const steps = Math.min(points, Math.ceil(maxTime / dt));
+    let tSim = 0;
     for (let i = 0; i < steps; i++) {
       // subdivide for accuracy
       const sub = 3;
+      if (wv) this.windVecAt(windT0 + tSim, wv);
       for (let s = 0; s < sub; s++) {
         body.pos = pos; body.vel = v;
-        this.integratePredict(body, dt / sub, windAffected, windCoupling, drag);
+        this.integratePredict(body, dt / sub, windAffected, windCoupling, drag, wv);
         if (this.testContact(pos, P.projectileRadius, stopOnBlock)) { hit = this.testContact(pos, P.projectileRadius, stopOnBlock); break; }
       }
+      tSim += dt;
       out.push(new THREE.Vector3(pos.x, pos.y, pos.z));
-      if (hit) { out.hit = hit; break; }
+      if (hit) { out.hit = hit; out.hitVel = v.clone(); out.tHit = tSim; break; }
     }
+    out.tEnd = tSim;
+    out.velEnd = v.clone();
     out.apex = 0;
     let maxY = -1e9;
     for (let i = 0; i < out.length; i++) if (out[i].y > maxY) { maxY = out[i].y; out.apex = i; }
     return out;
   }
 
-  integratePredict(b, h, windAffected, windCoupling, drag) {
+  integratePredict(b, h, windAffected, windCoupling, drag, windVec = null) {
     b.vel.addScaledVector(this.gravity, h);
     const sp = b.vel.length();
     if (sp > 0.001 && drag > 0) {
       const fd = drag * sp * sp * h;
       b.vel.addScaledVector(b.vel, -clamp(fd / sp, 0, 0.9));
     }
-    if (windAffected) { _tmpVecC.copy(this.wind).sub(b.vel).multiplyScalar(windCoupling * h); b.vel.add(_tmpVecC); }
+    const w = windVec || this.wind;
+    if (windAffected) { _tmpVecC.copy(w).sub(b.vel).multiplyScalar(windCoupling * h); b.vel.add(_tmpVecC); }
     b.pos.addScaledVector(b.vel, h);
   }
 

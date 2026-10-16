@@ -338,6 +338,100 @@ console.log('— РАУНД 1.4.1: катапульты лицом к цели, 
   check('мастерская ядер: замок подписан именем ранга/ветки, не «Уровень»', !/Закрыто · Уровень/.test(ammoTxt) && /ранг|Боеприпасы/i.test(ammoTxt), ammoTxt.match(/Закрыто[^🪙]{0,40}/)?.[0] || '');
 }
 
+console.log('— A1/A2: MIRROR предикт↔бой, детонация о землю, fuse на паузе, кольцо/плашка —');
+// свежий бой на ПОЛИГОНЕ: без лимитов выстрелов/времени, стены есть, солдат нет
+await G(() => { const g = window.__GAME__; if (g.inBattle) { g.inBattle = false; } g.hud.show(false); g.ui.show('menu'); });
+await new Promise((r) => setTimeout(r, 700));
+await clickText('Полигон'); await new Promise((r) => setTimeout(r, 800));
+await clickText('В ОСАДУ'); await new Promise((r) => setTimeout(r, 6000));
+await G(() => window.__GAME__._finishTutorial());
+const waitIdle = async () => {
+  for (let i = 0; i < 80; i++) {
+    const idle = await G(() => !window.__GAME__.trebuchet.busy && !window.__GAME__.shotInFlight);
+    if (idle) return true;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
+};
+{
+  // детерминизм: ветер и разброс почти нулевые
+  await G(() => {
+    const g = window.__GAME__;
+    g.physics.setWind(0, 0); g.physics.windBase.set(0, 0);
+    g.mods.spread = 0.02;
+    window.__imp2 = [];
+    const orig = g.ballistics.onImpact;
+    g.ballistics.onImpact = (r) => { window.__imp2.push({ kind: r.kind, p: r.point ? [r.point.x, r.point.y, r.point.z] : null }); return orig(r); };
+    g.loadout.grapeshot = 4; g.loadout.explosive = 4; g.hud.buildAmmo();
+  });
+  // 0) кольцо радиуса + плашка TOF для взрывного
+  const ring = await G(() => {
+    const g = window.__GAME__;
+    g.selectAmmo('explosive');
+    g._autoAimSuggest();
+    g._updatePrediction();
+    const pf = g.ballistics.predictFull(g.trebuchet.predictOrigin(new (g.trebuchet.root.position.constructor)()), g.trebuchet.launchDir(new (g.trebuchet.root.position.constructor)()), g.trebuchet.launchSpeed(g.trebuchet.aim.power), 'explosive', { points: 60, dt: 0.06 });
+    const diag = { showPredict: window.__S__().settings.showPredict, inBattle: g.inBattle, pfRad: pf.radius, hasImp: !!g._prediction.impact, pts: g._prediction.pts ? g._prediction.pts.length : -1, ammo: g.selectedAmmo, rad: g._prediction.impact ? g._prediction.impact.radius : null };
+    return {
+      diag,
+      ring: g.vfx.blastRing.visible,
+      radius: +g.vfx.blastRing.scale.x.toFixed(1),
+      label: g.vfx.impactLabel ? g.vfx.impactLabel.textContent : null,
+      labelOn: g.vfx.impactLabel ? g.vfx.impactLabel.style.display !== 'none' : false,
+    };
+  });
+  check('взрывное: кольцо радиуса + плашка «м · с · R»', ring.ring && ring.radius >= 3 && ring.labelOn && /R /.test(ring.label || ''), JSON.stringify(ring));
+  // 1) mirror: камень — предсказанный контакт == фактический
+  await waitIdle();
+  const mirror = await G(async () => {
+    const g = window.__GAME__;
+    g.selectAmmo('stone');
+    g._autoAimSuggest();
+    await new Promise((r) => setTimeout(r, 300));
+    const pred = g._prediction.impact.point.toArray();
+    window.__imp2.length = 0;
+    g.tryFire();
+    for (let i = 0; i < 90 && !window.__imp2.length; i++) await new Promise((r) => setTimeout(r, 400));
+    const ev = window.__imp2[0];
+    if (!ev) return { ok: false, why: 'no impact' };
+    const d = Math.hypot(ev.p[0] - pred[0], ev.p[2] - pred[2]);
+    return { ok: d < 0.7, d: +d.toFixed(2), kind: ev.kind };
+  });
+  check('mirror: контакт камня совпадает с дугой (≤0.7 м)', mirror.ok, JSON.stringify(mirror));
+  // 2) картечь о землю = детонация, не «miss»
+  await waitIdle();
+  const grap = await G(async () => {
+    const g = window.__GAME__;
+    g.selectAmmo('grapeshot');
+    g.trebuchet.setAim(0, 18, 0.55); g.hud.aimValues = { az: 0, el: 18, power: 0.55 }; g.hud.setAimReadout(g.hud.aimValues);
+    window.__imp2.length = 0;
+    g.tryFire();
+    for (let i = 0; i < 90 && !window.__imp2.length; i++) await new Promise((r) => setTimeout(r, 400));
+    return { kinds: window.__imp2.map((x) => x.kind) };
+  });
+  check('картечь о землю: детонация (blast), не miss', grap.kinds.includes('blast'), JSON.stringify(grap));
+  // 4) fuse в игровом времени: пауза держит взрыв
+  await waitIdle();
+  const fuse = await G(async () => {
+    const g = window.__GAME__;
+    g.selectAmmo('explosive');
+    g._autoAimSuggest();
+    window.__imp2.length = 0;
+    g.tryFire();
+    for (let i = 0; i < 100; i++) { if (g.currentShot && g.currentShot.fuseT > 0) break; await new Promise((r) => setTimeout(r, 300)); }
+    const inFuse = !!(g.currentShot && g.currentShot.fuseT > 0);
+    g.onPause();
+    const blasts0 = window.__imp2.filter((x) => x.kind === 'blast').length;
+    await new Promise((r) => setTimeout(r, 1800));   // реальное время > fuse 0.4 c
+    const blastsPaused = window.__imp2.filter((x) => x.kind === 'blast').length;
+    g.onResumeBattle();
+    for (let i = 0; i < 20; i++) { if (window.__imp2.filter((x) => x.kind === 'blast').length > blastsPaused) break; await new Promise((r) => setTimeout(r, 300)); }
+    const blastsAfter = window.__imp2.filter((x) => x.kind === 'blast').length;
+    return { inFuse, heldOnPause: blastsPaused === blasts0, blewAfterResume: blastsAfter > blastsPaused };
+  });
+  check('fuse в игровом времени: пауза держит, resume взрывает', fuse.inFuse && fuse.heldOnPause && fuse.blewAfterResume, JSON.stringify(fuse));
+}
+
 console.log(`\n=== ИТОГ: ${pass} passed, ${fail} failed ===`);
 console.log('page errors:', errors.length ? [...new Set(errors)].slice(0, 5).join(' | ') : 'none');
 await browser.close();

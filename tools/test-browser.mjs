@@ -119,23 +119,21 @@ const battle = await page.evaluate(() => {
 });
 console.log('battle:', JSON.stringify(battle));
 
-// --- precision sliders must write power as a fraction (regression: "8400%" bug)
-const prec = await page.evaluate(() => {
-  const g = window.__GAME__;
-  g.hud.togglePrecision(true);
-  const inp = g.hud.precPw.inp;
-  inp.value = '84';
-  inp.dispatchEvent(new Event('input'));
-  const v = g.hud.aimValues.power;
-  const txt = g.hud.readPw.textContent;
-  const azInp = g.hud.precAz.inp; azInp.value = '-12'; azInp.dispatchEvent(new Event('input'));
-  const az = g.hud.aimValues.az;
-  g.hud.togglePrecision(false);
-  return { v, txt, az };
-});
-console.log('precision sliders:', JSON.stringify(prec));
-if (!(Math.abs(prec.v - 0.84) < 1e-6 && /84%/.test(prec.txt) && Math.abs(prec.az + 12) < 1e-6)) {
-  errors.push('[assert] precision slider power/az mapping broken');
+// --- power strip: absolute power mapping, az/el untouched (1.5.0 pad redesign)
+const stripBox = await (await page.$('#powerstrip')).boundingBox();
+const pwBefore = await page.evaluate(() => ({ ...window.__GAME__.hud.aimValues }));
+await page.touchscreen.touchStart(stripBox.x + stripBox.width * 0.84, stripBox.y + stripBox.height / 2);
+await page.touchscreen.touchMove(stripBox.x + stripBox.width * 0.84, stripBox.y + stripBox.height / 2);
+await page.touchscreen.touchEnd();
+await new Promise((r) => setTimeout(r, 400));
+const pwAfter = await page.evaluate(() => ({ ...window.__GAME__.hud.aimValues }));
+console.log('power strip:', JSON.stringify({ pw: +pwAfter.power.toFixed(2), azSame: pwAfter.az === pwBefore.az, elSame: pwAfter.el === pwBefore.el }));
+if (!(Math.abs(pwAfter.power - (0.3 + 0.84 * 0.7)) < 0.03 && pwAfter.az === pwBefore.az && pwAfter.el === pwBefore.el)) {
+  errors.push('[assert] power strip mapping broken or leaks into az/el');
+}
+// precision panel must be GONE (no extra windows)
+if (await page.evaluate(() => !!document.querySelector('#hud .hud-panel input[type=range]'))) {
+  errors.push('[assert] precision panel still in DOM (should be removed in 1.5.0)');
 }
 
 // --- REAL TOUCH drag on the aim pad must steer the aim and fire on release
@@ -159,11 +157,14 @@ console.log('touch aim:', JSON.stringify({
 if (!(aimDuring.az < aimBefore.az - 3 && aimDuring.el > aimBefore.el + 3 && touchShots > 0)) {
   errors.push('[assert] touch aim drag/release did not steer+fire (screen-space az flip?)');
 }
+if (Math.abs(aimDuring.power - aimBefore.power) > 1e-9) {
+  errors.push('[assert] stick drag still leaks into power (U1 coupling not fixed)');
+}
 await new Promise((r) => setTimeout(r, 5000));
 
 // --- release inside the RED CANCEL ZONE must NOT fire (device regression)
 const shotsBeforeCancel = await page.evaluate(() => window.__GAME__.shotsThisMission.length);
-const cancelX = padBox.x + 14 + 46, cancelY = padBox.y + padBox.height - 14 - 46;
+const cancelX = padBox.x + 10 + 46, cancelY = padBox.y + padBox.height - 44 - 46;
 await page.touchscreen.touchStart(pcx, pcy);
 await page.touchscreen.touchMove(cancelX + 6, cancelY + 4);
 await new Promise((r) => setTimeout(r, 120));

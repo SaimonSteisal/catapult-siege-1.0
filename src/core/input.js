@@ -223,6 +223,7 @@ class InputManager {
       this.emit('aimmove', {
         dx: p.x - p.sx, dy: p.y - p.sy, x: p.x, y: p.y, w: p.w, h: p.h,
         dist: Math.hypot(p.x - p.sx, p.y - p.sy),
+        fine: this.pointers.size >= 2,   // second finger = fine mode (×0.25)
       });
       return;
     }
